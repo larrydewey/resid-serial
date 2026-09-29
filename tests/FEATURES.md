@@ -132,7 +132,7 @@ closures, handles.
 | Feature | Where |
 |---|---|
 | A non-self-describing format (fields by position, no peek/skip) | `formats/compact.resid`, `compact_test.resid` |
-| 100k-element lists (Value, compact), 20k lists (tokens), 20k maps, nesting depth 2000 | `scale.resid` |
+| 100k-element lists (Value, compact), 20k lists (tokens), 20k maps, nesting depth 2000, 100k non-ASCII code points of a `Str(N)` through every format, a recursive type's show | `scale.resid` |
 
 ## Documentation
 

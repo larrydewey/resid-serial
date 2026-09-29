@@ -6,6 +6,10 @@ import "../src/serial_test.resid";
 import "formats/compact.resid";
 import "check.resid";
 
+type Tree = Leaf(Int) | Node(List(Tree));
+
+Tree deep_tree(Int d) { return if (d == 0) { Leaf(0) } else { Node([deep_tree(d - 1), Leaf(d)]) }; }
+
 List(Int) count_up(Int i, Int n, ListBuf(Int) acc) {
     if (i >= n) { return acc.finish(); }
     return count_up(i + 1, n, acc.push(i));
@@ -42,6 +46,18 @@ Int main() {
     Value deep = nest(rt 2000, VInt(1));
     Result(Value, SerialError) dr = to_value(deep);
     Result(Value, SerialError) dt = from_tokens(to_tokens(deep) else { none });
+    // Long non-ASCII fixed strings stream through every format in linear
+    // time (a quadratic read would take minutes here).
+    Str txt = str_repeat("é☃", rt 50000);
+    Result(Str(300000), SerialError) fs0 = from_value(VStr(txt));
+    Str(300000) fs = fs0 else { "" };
+    Result(Value, SerialError) fv = to_value(fs);
+    Result(Str(300000), SerialError) ft = from_tokens(to_tokens(fs) else { none });
+    Result(Str(300000), SerialError) fc = from_compact(to_compact(fs) else { [] });
+    Bool a6 = check("100k non-ASCII code points through Value, tokens, compact", str_len(fs) == 100000 && match fv { Ok(v) => true, Err(e7) => false } && match ft { Ok(x) => str_len(x) == 100000, Err(e8) => false } && match fc { Ok(y) => str_len(y) == 100000, Err(e9) => false });
+    // A recursive type shows structurally (one show function per type).
+    Tree tr = deep_tree(rt 3);
+    Bool a7 = check("recursive type shows", f"{tr}" == "Node([Node([Node([Leaf(0), Leaf(1)]), Leaf(2)]), Leaf(3)])");
     Bool a5 = check("depth 2000 nesting", match dr { Ok(v) => value_eq(v, deep), Err(e5) => false } && match dt { Ok(v2) => value_eq(v2, deep), Err(e6) => false });
     return 0;
 }

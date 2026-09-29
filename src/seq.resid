@@ -26,8 +26,8 @@ Int fixed_list_count(List(T, N) xs) { return xs.len(); }
 T fixed_list_item(List(T, N) xs, Int i) { return xs[i]; }
 Indexed(List(T, N), T) = { .count = fixed_list_count, .item = fixed_list_item };
 
-// Code points of a string (str_char_at walks from the start for a
-// non-ASCII string, so an item is O(i) there).
+// Code points of a string. The runtime keeps a code point index per
+// string it reads, so reading the items in order is linear.
 Int text_count(Str s) { return str_len(s); }
 Int text_item(Str s, Int i) { return str_char_at(s, i); }
 Indexed(Str, Int) = { .count = text_count, .item = text_item };

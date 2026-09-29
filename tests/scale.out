@@ -2,5 +2,7 @@ ok   100k list through Value
 ok   100k list through compact
 ok   20k list through tokens
 ok   20k map through Value
+ok   100k non-ASCII code points through Value, tokens, compact
+ok   recursive type shows
 ok   depth 2000 nesting
 exit 0
