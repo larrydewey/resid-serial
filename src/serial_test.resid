@@ -1,0 +1,469 @@
+// serial_test.resid — test helpers for Encode/Decode instances (serde_test's
+// role): a format whose output is the list of protocol events, and
+// assertions that a value encodes to, and decodes from, exact tokens.
+//
+//     Bool ok = assert_tokens(Point {.x = 1, .y = 2}, [
+//         TokStruct(struct_tok("Point", 2)),
+//         TokField("x"), TokInt(1),
+//         TokField("y"), TokInt(2),
+//         TokStructEnd
+//     ]);
+//
+// Separators (write_seq_elem, write_map_key, write_map_value) carry no
+// token: they only matter to formats with punctuation.
+
+import "serial.resid";
+
+type StructTok = { Str name; Int len; };
+type VariantTok = { Str enum_name; Int index; Str variant; };
+
+type Token = TokUnit | TokBool(Bool) | TokInt(Int) | TokUInt(UInt(64)) | TokI128(Int(128)) | TokU128(UInt(128)) | TokFloat(Float) | TokStr(Str) | TokBytes(List(Int)) | TokNone | TokSome | TokSeq(Int) | TokSeqEnd | TokMap(Int) | TokMapEnd | TokStruct(StructTok) | TokField(Str) | TokStructEnd | TokUnitVariant(VariantTok) | TokVariant(VariantTok) | TokVariantEnd;
+
+pub StructTok struct_tok(Str name, Int len) { return StructTok {.name = name, .len = len}; }
+
+pub VariantTok variant_tok(Str enum_name, Int index, Str variant) { return VariantTok {.enum_name = enum_name, .index = index, .variant = variant}; }
+
+pub Str show_token(Token t) {
+    return match t {
+        TokUnit => "Unit", TokBool(b) => f"Bool({b})", TokInt(i) => f"Int({i})", TokUInt(u) => f"UInt({u})",
+        TokI128(w) => f"I128({w})", TokU128(uw) => f"U128({uw})",
+        TokFloat(f) => f"Float({f})", TokStr(s) => "Str(\"" + s + "\")", TokBytes(bs) => f"Bytes({bs})",
+        TokNone => "None", TokSome => "Some", TokSeq(n) => f"Seq({n})", TokSeqEnd => "SeqEnd",
+        TokMap(n) => f"Map({n})", TokMapEnd => "MapEnd", TokStruct(st) => "Struct(" + st.name + f", {st.len})",
+        TokField(k) => "Field(" + k + ")", TokStructEnd => "StructEnd",
+        TokUnitVariant(v) => "UnitVariant(" + v.enum_name + "::" + v.variant + f" #{v.index})",
+        TokVariant(v) => "Variant(" + v.enum_name + "::" + v.variant + f" #{v.index})", TokVariantEnd => "VariantEnd"
+    };
+}
+Show(Token) = show_token;
+
+pub Bool token_eq(Token a, Token b) {
+    return match a {
+        TokUnit => match b { TokUnit => true, _ => false },
+        TokBool(x) => match b { TokBool(y) => x == y, _ => false },
+        TokInt(x) => match b { TokInt(y) => x == y, _ => false },
+        TokUInt(x) => match b { TokUInt(y) => x == y, _ => false },
+        TokI128(x) => match b { TokI128(y) => x == y, _ => false },
+        TokU128(x) => match b { TokU128(y) => x == y, _ => false },
+        TokFloat(x) => match b { TokFloat(y) => x == y, _ => false },
+        TokStr(x) => match b { TokStr(y) => x == y, _ => false },
+        TokBytes(x) => match b { TokBytes(y) => f"{x}" == f"{y}", _ => false },
+        TokNone => match b { TokNone => true, _ => false },
+        TokSome => match b { TokSome => true, _ => false },
+        TokSeq(x) => match b { TokSeq(y) => x == y, _ => false },
+        TokSeqEnd => match b { TokSeqEnd => true, _ => false },
+        TokMap(x) => match b { TokMap(y) => x == y, _ => false },
+        TokMapEnd => match b { TokMapEnd => true, _ => false },
+        TokStruct(x) => match b { TokStruct(y) => x.name == y.name && x.len == y.len, _ => false },
+        TokField(x) => match b { TokField(y) => x == y, _ => false },
+        TokStructEnd => match b { TokStructEnd => true, _ => false },
+        TokUnitVariant(x) => match b { TokUnitVariant(y) => variant_tok_eq(x, y), _ => false },
+        TokVariant(x) => match b { TokVariant(y) => variant_tok_eq(x, y), _ => false },
+        TokVariantEnd => match b { TokVariantEnd => true, _ => false }
+    };
+}
+Eq(Token) = token_eq;
+
+Bool variant_tok_eq(VariantTok a, VariantTok b) { return a.enum_name == b.enum_name && a.index == b.index && a.variant == b.variant; }
+
+// ─── Encoder(TokEnc) ────────────────────────────────────────────────
+
+// The tokens so far, and a string or bytes being streamed: its items so
+// far and which (0 none, 1 a string, 2 bytes). A streamed value becomes
+// the same one token (Str / Bytes) a whole one does.
+type TokEnc = { List(Token) toks; List(Int) pend; Int mode; };
+
+pub TokEnc token_encoder() {
+    List(Token) none = [];
+    List(Int) np = [];
+    return TokEnc {.toks = none, .pend = np, .mode = 0};
+}
+
+Result(TokEnc, SerialError) te_add(TokEnc e, Token t) {
+    if (e.mode != 0) { return Err(custom_error("a value inside a streamed string or bytes")); }
+    return Ok(TokEnc {.toks = e.toks.concat([t]), .pend = e.pend, .mode = 0});
+}
+
+Result(TokEnc, SerialError) te_stream_begin(TokEnc e, Int mode) {
+    if (e.mode != 0) { return Err(custom_error("a stream inside a streamed string or bytes")); }
+    List(Int) np = [];
+    return Ok(TokEnc {.toks = e.toks, .pend = np, .mode = mode});
+}
+
+Result(TokEnc, SerialError) te_stream_add(TokEnc e, Int mode, Int x) {
+    if (e.mode != mode) { return Err(custom_error(if (mode == 1) { "write_str_char outside a string" } else { "write_byte outside bytes" })); }
+    return Ok(TokEnc {.toks = e.toks, .pend = e.pend.concat([x]), .mode = mode});
+}
+
+Result(TokEnc, SerialError) te_stream_end(TokEnc e, Int mode) {
+    if (e.mode != mode) { return Err(custom_error(if (mode == 1) { "write_str_end outside a string" } else { "write_bytes_end outside bytes" })); }
+    Token t = if (mode == 1) { TokStr(cps_text(e.pend, 0, StrBuf())) } else { TokBytes(e.pend) };
+    List(Int) np = [];
+    return Ok(TokEnc {.toks = e.toks.concat([t]), .pend = np, .mode = 0});
+}
+
+Str cps_text(List(Int) cps, Int i, StrBuf acc) {
+    if (i >= cps.len()) { return acc.finish(); }
+    return cps_text(cps, i + 1, acc.push_char(cps[i]));
+}
+
+Result(TokEnc, SerialError) te_str_begin(TokEnc e, Int chars, Int bytes) { return te_stream_begin(e, 1); }
+Result(TokEnc, SerialError) te_str_char(TokEnc e, Int cp) { return te_stream_add(e, 1, cp); }
+Result(TokEnc, SerialError) te_str_end(TokEnc e) { return te_stream_end(e, 1); }
+Result(TokEnc, SerialError) te_bytes_begin(TokEnc e, Int len) { return te_stream_begin(e, 2); }
+Result(TokEnc, SerialError) te_byte(TokEnc e, Int b) { return te_stream_add(e, 2, b); }
+Result(TokEnc, SerialError) te_bytes_end(TokEnc e) { return te_stream_end(e, 2); }
+
+Result(TokEnc, SerialError) te_unit(TokEnc e) { return te_add(e, TokUnit); }
+Result(TokEnc, SerialError) te_bool(TokEnc e, Bool v) { return te_add(e, TokBool(v)); }
+Result(TokEnc, SerialError) te_int(TokEnc e, Int v) { return te_add(e, TokInt(v)); }
+Result(TokEnc, SerialError) te_uint(TokEnc e, UInt(64) v) { return te_add(e, TokUInt(v)); }
+Result(TokEnc, SerialError) te_i128(TokEnc e, Int(128) v) { return te_add(e, TokI128(v)); }
+Result(TokEnc, SerialError) te_u128(TokEnc e, UInt(128) v) { return te_add(e, TokU128(v)); }
+Result(TokEnc, SerialError) te_float(TokEnc e, Float v) { return te_add(e, TokFloat(v)); }
+Result(TokEnc, SerialError) te_str(TokEnc e, Str v) { return te_add(e, TokStr(v)); }
+Result(TokEnc, SerialError) te_bytes(TokEnc e, List(Int) v) { return te_add(e, TokBytes(v)); }
+Result(TokEnc, SerialError) te_none(TokEnc e) { return te_add(e, TokNone); }
+Result(TokEnc, SerialError) te_some(TokEnc e) { return te_add(e, TokSome); }
+Result(TokEnc, SerialError) te_seq_begin(TokEnc e, Int len) { return te_add(e, TokSeq(len)); }
+Result(TokEnc, SerialError) te_pass(TokEnc e) {
+    if (e.mode != 0) { return Err(custom_error("a separator inside a streamed string or bytes")); }
+    return Ok(e);
+}
+Result(TokEnc, SerialError) te_seq_end(TokEnc e) { return te_add(e, TokSeqEnd); }
+Result(TokEnc, SerialError) te_map_begin(TokEnc e, Int len) { return te_add(e, TokMap(len)); }
+Result(TokEnc, SerialError) te_map_end(TokEnc e) { return te_add(e, TokMapEnd); }
+Result(TokEnc, SerialError) te_struct_begin(TokEnc e, Str name, Int len) { return te_add(e, TokStruct(struct_tok(name, len))); }
+Result(TokEnc, SerialError) te_field(TokEnc e, Str key) { return te_add(e, TokField(key)); }
+Result(TokEnc, SerialError) te_struct_end(TokEnc e) { return te_add(e, TokStructEnd); }
+Result(TokEnc, SerialError) te_unit_variant(TokEnc e, Str enum_name, Int index, Str variant) { return te_add(e, TokUnitVariant(variant_tok(enum_name, index, variant))); }
+Result(TokEnc, SerialError) te_variant_begin(TokEnc e, Str enum_name, Int index, Str variant) { return te_add(e, TokVariant(variant_tok(enum_name, index, variant))); }
+Result(TokEnc, SerialError) te_variant_end(TokEnc e) { return te_add(e, TokVariantEnd); }
+Bool te_human(TokEnc e) { return true; }
+
+Encoder(TokEnc) = {
+    .write_unit = te_unit, .write_bool = te_bool, .write_int = te_int, .write_uint = te_uint,
+    .write_i128 = te_i128, .write_u128 = te_u128,
+    .write_float = te_float, .write_str = te_str, .write_bytes = te_bytes, .write_none = te_none,
+    .write_str_begin = te_str_begin, .write_str_char = te_str_char, .write_str_end = te_str_end,
+    .write_bytes_begin = te_bytes_begin, .write_byte = te_byte, .write_bytes_end = te_bytes_end,
+    .write_some = te_some, .write_seq_begin = te_seq_begin, .write_seq_elem = te_pass, .write_seq_end = te_seq_end,
+    .write_map_begin = te_map_begin, .write_map_key = te_pass, .write_map_value = te_pass, .write_map_end = te_map_end,
+    .write_struct_begin = te_struct_begin, .write_field = te_field, .write_struct_end = te_struct_end,
+    .write_unit_variant = te_unit_variant, .write_variant_begin = te_variant_begin, .write_variant_end = te_variant_end,
+    .encodes_human_readable = te_human
+};
+
+@needs(Encode(T, TokEnc))
+pub Result(List(Token), SerialError) to_tokens(T x) {
+    TokEnc e = encode(x, token_encoder())?;
+    if (e.mode != 0) { return Err(custom_error("encoding ended inside a streamed string or bytes")); }
+    return Ok(e.toks);
+}
+
+// ─── Decoder(TokDec) ────────────────────────────────────────────────
+
+// The tokens, the read position, what the last read_variant found (0
+// none, 1 a unit variant, 2 a variant with a payload), and while a Str
+// or Bytes token is being pulled item by item, the next item's index
+// (-1 otherwise).
+type TokDec = { List(Token) toks; Int pos; Int variant; Int sub; };
+
+pub TokDec token_decoder(List(Token) toks) { return TokDec {.toks = toks, .pos = 0, .variant = 0, .sub = -1}; }
+
+TokDec td_at(TokDec d, Int pos, Int variant) { return TokDec {.toks = d.toks, .pos = pos, .variant = variant, .sub = -1}; }
+
+TokDec td_sub(TokDec d, Int sub) { return TokDec {.toks = d.toks, .pos = d.pos, .variant = d.variant, .sub = sub}; }
+
+TokDec td_next(TokDec d) { return td_at(d, d.pos + 1, d.variant); }
+
+// The next token, or an end-of-input error.
+Result(Token, SerialError) td_peek_tok(TokDec d, Str expected) {
+    if (d.pos >= d.toks.len()) { return Err(eof_error(expected)); }
+    return Ok(d.toks[d.pos]);
+}
+
+Result(TokDec, SerialError) td_expect(TokDec d, Token want) {
+    Token t = td_peek_tok(d, show_token(want))?;
+    if (!token_eq(t, want)) { return Err(invalid_type(show_token(want), show_token(t))); }
+    return Ok(td_next(d));
+}
+
+Result(TokDec, SerialError) td_unit(TokDec d) { return td_expect(d, TokUnit); }
+
+Result(Parsed(Bool, TokDec), SerialError) td_bool(TokDec d) {
+    Token t = td_peek_tok(d, "Bool")?;
+    return match t { TokBool(b) => parsed(b, td_next(d)), _ => Err(invalid_type("Bool", show_token(t))) };
+}
+
+Result(Parsed(Int, TokDec), SerialError) td_int(TokDec d) {
+    Token t = td_peek_tok(d, "Int")?;
+    return match t { TokInt(i) => parsed(i, td_next(d)), _ => Err(invalid_type("Int", show_token(t))) };
+}
+
+Result(Parsed(UInt(64), TokDec), SerialError) td_uint(TokDec d) {
+    Token t = td_peek_tok(d, "UInt")?;
+    return match t { TokUInt(u) => parsed(u, td_next(d)), _ => Err(invalid_type("UInt", show_token(t))) };
+}
+
+Result(Parsed(Int(128), TokDec), SerialError) td_i128(TokDec d) {
+    Token t = td_peek_tok(d, "I128")?;
+    return match t { TokI128(w) => parsed(w, td_next(d)), _ => Err(invalid_type("I128", show_token(t))) };
+}
+
+Result(Parsed(UInt(128), TokDec), SerialError) td_u128(TokDec d) {
+    Token t = td_peek_tok(d, "U128")?;
+    return match t { TokU128(uw) => parsed(uw, td_next(d)), _ => Err(invalid_type("U128", show_token(t))) };
+}
+
+Result(Parsed(Float, TokDec), SerialError) td_float(TokDec d) {
+    Token t = td_peek_tok(d, "Float")?;
+    return match t { TokFloat(f) => parsed(f, td_next(d)), _ => Err(invalid_type("Float", show_token(t))) };
+}
+
+Result(Parsed(Str, TokDec), SerialError) td_str(TokDec d) {
+    Token t = td_peek_tok(d, "Str")?;
+    return match t { TokStr(s) => parsed(s, td_next(d)), _ => Err(invalid_type("Str", show_token(t))) };
+}
+
+Result(Parsed(List(Int), TokDec), SerialError) td_bytes(TokDec d) {
+    Token t = td_peek_tok(d, "Bytes")?;
+    return match t { TokBytes(bs) => parsed(bs, td_next(d)), _ => Err(invalid_type("Bytes", show_token(t))) };
+}
+
+// Pulling a Str / Bytes token: begin marks the item index, next reads
+// items and, at the end, moves past the token and gives -1.
+Result(Parsed(Int, TokDec), SerialError) td_str_begin(TokDec d) {
+    Token t = td_peek_tok(d, "Str")?;
+    return match t { TokStr(s) => parsed(str_len(s), td_sub(d, 0)), _ => Err(invalid_type("Str", show_token(t))) };
+}
+
+Result(Parsed(Int, TokDec), SerialError) td_str_next(TokDec d) {
+    Token t = td_peek_tok(d, "Str")?;
+    if (d.sub < 0) { return Err(custom_error("read_str_next without read_str_begin")); }
+    return match t {
+        TokStr(s) => if (d.sub < str_len(s)) { parsed(str_char_at(s, d.sub), td_sub(d, d.sub + 1)) } else { parsed(-1, td_next(d)) },
+        _ => Err(invalid_type("Str", show_token(t)))
+    };
+}
+
+Result(Parsed(Int, TokDec), SerialError) td_bytes_begin(TokDec d) {
+    Token t = td_peek_tok(d, "Bytes")?;
+    return match t { TokBytes(bs) => parsed(bs.len(), td_sub(d, 0)), _ => Err(invalid_type("Bytes", show_token(t))) };
+}
+
+Result(Parsed(Int, TokDec), SerialError) td_bytes_next(TokDec d) {
+    Token t = td_peek_tok(d, "Bytes")?;
+    if (d.sub < 0) { return Err(custom_error("read_bytes_next without read_bytes_begin")); }
+    return match t {
+        TokBytes(bs) => if (d.sub < bs.len()) { parsed(bs[d.sub], td_sub(d, d.sub + 1)) } else { parsed(-1, td_next(d)) },
+        _ => Err(invalid_type("Bytes", show_token(t)))
+    };
+}
+
+Result(Parsed(Bool, TokDec), SerialError) td_option(TokDec d) {
+    Token t = td_peek_tok(d, "None or Some")?;
+    return match t {
+        TokNone => parsed(false, td_next(d)),
+        TokSome => parsed(true, td_next(d)),
+        _ => Err(invalid_type("None or Some", show_token(t)))
+    };
+}
+
+Result(Parsed(Int, TokDec), SerialError) td_seq_begin(TokDec d) {
+    Token t = td_peek_tok(d, "Seq")?;
+    return match t { TokSeq(n) => parsed(n, td_next(d)), _ => Err(invalid_type("Seq", show_token(t))) };
+}
+
+// Is the next token `end`? Then consume it and report false.
+Result(Parsed(Bool, TokDec), SerialError) td_more(TokDec d, Token end) {
+    Token t = td_peek_tok(d, show_token(end))?;
+    if (token_eq(t, end)) { return parsed(false, td_next(d)); }
+    return parsed(true, d);
+}
+
+Result(Parsed(Bool, TokDec), SerialError) td_seq_next(TokDec d) { return td_more(d, TokSeqEnd); }
+
+Result(Parsed(Int, TokDec), SerialError) td_map_begin(TokDec d) {
+    Token t = td_peek_tok(d, "Map")?;
+    return match t { TokMap(n) => parsed(n, td_next(d)), _ => Err(invalid_type("Map", show_token(t))) };
+}
+
+Result(Parsed(Bool, TokDec), SerialError) td_map_next(TokDec d) { return td_more(d, TokMapEnd); }
+
+Result(TokDec, SerialError) td_pass(TokDec d) { return Ok(d); }
+
+Result(TokDec, SerialError) td_struct_begin(TokDec d, Str name, List(Str) fields) {
+    Token t = td_peek_tok(d, "Struct")?;
+    return match t {
+        TokStruct(st) => if (name == "" || st.name == name) { Ok(td_next(d)) } else { Err(invalid_type("struct " + name, "struct " + st.name)) },
+        _ => Err(invalid_type("Struct(" + name + ")", show_token(t)))
+    };
+}
+
+Result(Parsed(FieldKey, TokDec), SerialError) td_field(TokDec d, List(Str) fields) {
+    Token t = td_peek_tok(d, "Field or StructEnd")?;
+    return match t {
+        TokField(k) => parsed(td_key(fields, k), td_next(d)),
+        TokStructEnd => parsed(EndOfFields, td_next(d)),
+        _ => Err(invalid_type("Field or StructEnd", show_token(t)))
+    };
+}
+
+FieldKey td_key(List(Str) fields, Str k) {
+    Int i = name_index(fields, k);
+    return if (i >= 0) { KnownField(i) } else { UnknownField(k) };
+}
+
+Result(Parsed(VariantName, TokDec), SerialError) td_variant_name(TokDec d) {
+    Token t = td_peek_tok(d, "a variant")?;
+    return match t {
+        TokUnitVariant(v) => parsed(variant_name(v.enum_name, v.index, v.variant, false), td_at(d, d.pos + 1, 1)),
+        TokVariant(v) => parsed(variant_name(v.enum_name, v.index, v.variant, true), td_at(d, d.pos + 1, 2)),
+        _ => Err(invalid_type("a variant", show_token(t)))
+    };
+}
+
+Result(Parsed(Int, TokDec), SerialError) td_variant(TokDec d, Str enum_name, List(Str) variants) {
+    Parsed(VariantName, TokDec) p = td_variant_name(d)?;
+    Int i = name_index(variants, p.value.name);
+    if (i < 0) { return Err(unknown_variant(p.value.name, variants)); }
+    return parsed(i, p.rest);
+}
+
+Result(TokDec, SerialError) td_variant_unit(TokDec d) {
+    if (d.variant != 1) { return Err(invalid_type("a unit variant", "a variant with a payload")); }
+    return Ok(td_at(d, d.pos, 0));
+}
+
+Result(TokDec, SerialError) td_variant_payload(TokDec d) {
+    if (d.variant != 2) { return Err(invalid_type("a variant with a payload", "a unit variant")); }
+    return Ok(td_at(d, d.pos, 0));
+}
+
+Result(TokDec, SerialError) td_variant_end(TokDec d) { return td_expect(d, TokVariantEnd); }
+
+// Skip one whole value: count opening and closing tokens.
+Result(TokDec, SerialError) td_skip(TokDec d) { return td_skip_depth(d, 0); }
+
+Result(TokDec, SerialError) td_skip_depth(TokDec d, Int depth) {
+    Token t = td_peek_tok(d, "a value")?;
+    Int delta = token_depth(t);
+    Int nd = depth + delta;
+    TokDec d1 = td_next(d);
+    // A value ends when we are back at depth 0 after something other than
+    // a prefix token (Some, Field, a payload variant opener).
+    if (nd == 0 && !token_prefix(t)) { return Ok(d1); }
+    return td_skip_depth(d1, nd);
+}
+
+Int token_depth(Token t) {
+    return match t {
+        TokSeq(n) => 1, TokMap(n) => 1, TokStruct(st) => 1, TokVariant(v) => 1,
+        TokSeqEnd => -1, TokMapEnd => -1, TokStructEnd => -1, TokVariantEnd => -1, _ => 0
+    };
+}
+
+Bool token_prefix(Token t) { return match t { TokSome => true, TokField(k) => true, _ => false }; }
+
+Result(Parsed(Peek, TokDec), SerialError) td_peek(TokDec d) {
+    Token t = td_peek_tok(d, "a value")?;
+    Peek p = match t {
+        TokUnit => PeekUnit, TokBool(b) => PeekBool, TokInt(i) => PeekInt, TokUInt(u) => PeekUInt,
+        TokI128(w) => PeekI128, TokU128(uw) => PeekU128,
+        TokFloat(f) => PeekFloat, TokStr(s) => PeekStr, TokBytes(bs) => PeekBytes, TokNone => PeekNone,
+        TokSome => PeekSome, TokSeq(n) => PeekSeq, TokMap(n) => PeekMap, TokStruct(st) => PeekStruct(st.name),
+        TokUnitVariant(v) => PeekVariant, TokVariant(v) => PeekVariant, _ => PeekUnit
+    };
+    Bool value = match t { TokSeqEnd => false, TokMapEnd => false, TokStructEnd => false, TokField(k) => false, TokVariantEnd => false, _ => true };
+    if (!value) { return Err(invalid_type("a value", show_token(t))); }
+    return parsed(p, d);
+}
+
+Result(TokDec, SerialError) td_end(TokDec d) {
+    if (d.pos < d.toks.len()) { return Err(trailing_input(show_token(d.toks[d.pos]))); }
+    return Ok(d);
+}
+
+Bool td_human(TokDec d) { return true; }
+
+Decoder(TokDec) = {
+    .read_unit = td_unit, .read_bool = td_bool, .read_int = td_int, .read_uint = td_uint,
+    .read_i128 = td_i128, .read_u128 = td_u128,
+    .read_float = td_float, .read_str = td_str, .read_bytes = td_bytes, .read_option = td_option,
+    .read_str_begin = td_str_begin, .read_str_next = td_str_next, .read_bytes_begin = td_bytes_begin, .read_bytes_next = td_bytes_next,
+    .read_seq_begin = td_seq_begin, .read_seq_next = td_seq_next, .read_map_begin = td_map_begin,
+    .read_map_next = td_map_next, .read_map_value = td_pass, .read_struct_begin = td_struct_begin,
+    .read_field = td_field, .read_variant = td_variant, .read_variant_name = td_variant_name,
+    .read_variant_unit = td_variant_unit, .read_variant_payload = td_variant_payload,
+    .read_variant_end = td_variant_end, .read_skip = td_skip, .read_peek = td_peek, .read_end = td_end,
+    .decodes_human_readable = td_human
+};
+
+@needs(Decode(T, TokDec))
+pub Result(T, SerialError) from_tokens(List(Token) toks) { return decode_value(token_decoder(toks)); }
+
+// ─── Assertions ─────────────────────────────────────────────────────
+//
+// Each prints a report on failure (to stdout, so golden tests see it) and
+// returns whether it passed.
+
+Str show_tokens(List(Token) ts) { return f"{ts}"; }
+
+Bool tokens_eq(List(Token) a, List(Token) b, Int i) {
+    if (a.len() != b.len()) { return false; }
+    if (i >= a.len()) { return true; }
+    return token_eq(a[i], b[i]) && tokens_eq(a, b, i + 1);
+}
+
+// `x` encodes to exactly `expected`.
+@needs(Encode(T, TokEnc))
+pub Bool assert_ser_tokens(T x, List(Token) expected) {
+    Result(List(Token), SerialError) r = to_tokens(x);
+    if (Err(e) = r) {
+        println("assert_ser_tokens: encoding failed: " + error_text(e));
+        return false;
+    }
+    List(Token) none = [];
+    List(Token) got = r else { none };
+    if (!tokens_eq(got, expected, 0)) {
+        println("assert_ser_tokens: token mismatch\n  expected " + show_tokens(expected) + "\n  got      " + show_tokens(got));
+        return false;
+    }
+    return true;
+}
+
+// `expected` decodes to a value that encodes back to `expected`.
+@needs(Encode(T, TokEnc), Decode(T, TokDec))
+pub Bool assert_de_tokens(T sample, List(Token) expected) {
+    Result(T, SerialError) r = from_tokens(expected);
+    if (Err(e) = r) {
+        println("assert_de_tokens: decoding failed: " + error_text(e));
+        return false;
+    }
+    T got = r else { sample };
+    return assert_ser_tokens(got, expected);
+}
+
+// Both directions: `x` encodes to `expected`, and `expected` decodes to a
+// value that encodes back to it. (Decoded values are compared through
+// their encoding, so T needs no Eq.)
+@needs(Encode(T, TokEnc), Decode(T, TokDec))
+pub Bool assert_tokens(T x, List(Token) expected) {
+    Bool ser = assert_ser_tokens(x, expected);
+    Bool de = assert_de_tokens(x, expected);
+    return ser && de;
+}
+
+// Decoding `toks` as a T fails with exactly `msg` (error_text).
+@needs(Decode(T, TokDec))
+pub Bool assert_de_error(T sample, List(Token) toks, Str msg) {
+    Result(T, SerialError) r = from_tokens(toks);
+    if (Err(e) = r) {
+        if (error_text(e) == msg) { return true; }
+        println("assert_de_error: wrong error\n  expected " + msg + "\n  got      " + error_text(e));
+        return false;
+    }
+    println("assert_de_error: decoding succeeded, expected error: " + msg);
+    return false;
+}

@@ -1,0 +1,36 @@
+ok   Encode(Value) tokens
+ok   Decode(Value) every kind
+ok   Decode(Value) loses no structure
+ok   Decode(Value) struct
+ok   Decode(Value) variant
+ok   Decode(Value) on an end marker
+ok   Decode(Value) mixed seq
+ok   to_value(Value) is identity
+ok   to_value of builtins
+ok   to_value of map and result
+ok   to_value misuse
+ok   value_encoder is human readable
+ok   to_value of fixed values
+ok   from_value into fixed values
+ok   pulling without begin
+ok   Int from UInt/I128/U128
+ok   Int out of range
+ok   Int from non-integer
+ok   UInt paths
+ok   Int(128) paths
+ok   UInt(128) paths
+ok   narrow ints through Value
+ok   Float from integers
+ok   bool/str/unit
+ok   bytes paths
+ok   option paths
+ok   seq paths
+ok   map paths
+ok   map from struct
+ok   variant paths
+ok   value_decoder is human readable
+ok   read_skip / read_peek
+ok   read_peek at end
+ok   read_end with input left
+ok   read at end
+exit 0

@@ -1,0 +1,25 @@
+ok   point
+swapped: Ok(Point { x: 1, y: 2 })
+ok   point missing
+ok   point duplicate
+ok   point unknown ignored
+ok   user ser (rename, camelCase, skip_if, skip)
+user from alias, defaults: Ok(User { user_name: "bo", login_count: 0, email: None, home_points: [], secret: "hidden" })
+ok   user deny unknown
+ok   user with email
+ok   shape circle
+ok   shape square
+ok   shape unit
+shape alias: Ok(Nothing)
+ok   generic pair
+tree value: Tree::Node([Tree::Leaf(1), Tree::Node([Tree::Leaf(2)])])
+ok   generic recursive tree
+ok   transparent
+internal tag: Event { type: "Click", x: 1, y: 2 }
+internal back: Ok(Click(Point { x: 1, y: 2 }))
+internal unit: Event { type: "Quit" } -> Ok(Quit)
+adjacent: Msg { t: "Text", c: "hi" } Msg { t: "Ping" } -> Ok(Text("hi")) Ok(Ping)
+untagged: [4, "w", Point { x: 1, y: 2 }] -> Ok([Num(4), Word("w"), Pt(Point { x: 1, y: 2 })])
+untagged error: Err(data did not match any variant of untagged enum Loose)
+flatten: Wrapper { id: "w1", x: 1, y: 2 } -> Ok(Wrapper { id: "w1", pos: Point { x: 1, y: 2 } })
+exit 0

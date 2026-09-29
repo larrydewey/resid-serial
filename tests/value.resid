@@ -1,0 +1,123 @@
+// The Value tree API: constructors, kinds, Show, equality, lookups and
+// the representation helpers generated code uses.
+import "../src/serial.resid";
+import "../src/value.resid";
+import "../src/serial_test.resid";
+import "check.resid";
+
+@needs(Show(T))
+Str sr(Result(T, SerialError) r) { return f"{r}"; }
+
+Int main() {
+    VTag tg = vtag("E", 1, "V");
+    Value rec = vstruct("P", [vfield("x", VInt(1)), vfield("y", VStr("s"))]);
+    Value anon = vstruct("", [vfield("x", VInt(1))]);
+    Value emptyrec = vstruct("Q", []);
+    Value smap = VMap([ventry(VStr("x"), VInt(2)), ventry(VStr("z"), VBool(true))]);
+    Value imap = VMap([ventry(VInt(1), VStr("one"))]);
+    List(Value) all = [
+        VUnit, VBool(true), VInt(-1), VUInt(u64(2)), VI128(i128(-3)), VU128(u128(4)), VFloat(1.5), VFloat(2.0),
+        VStr("q"), VBytes([1, 2]), VNone, VSome(VInt(5)), VSeq([VInt(1), VNone]), VSeq([]), smap, VMap([]),
+        rec, anon, emptyrec, VUnitVariant(tg), VUnitVariant(vtag("", -1, "W")), vvariant(tg, VInt(9))
+    ];
+
+    // ── Constructors and Show, every variant.
+    Bool s1 = check_text("show_value every variant", f"{all}",
+        "[(), true, -1, 2u, -3i128, 4u128, 1.5, 2.0, \"q\", b[1, 2], None, Some(5), [1, None], [], {\"x\": 2, \"z\": true}, {}, P { x: 1, y: \"s\" }, { x: 1 }, Q {}, E::V, W, E::V(9)]");
+    Bool s2 = check_text("ventry/vfield/vtag fields", f"{ventry(VInt(1), VInt(2)).key} {vfield("n", VUnit).name} {tg.enum_name} {tg.index} {tg.name}", "1 n E 1 V");
+
+    // ── value_kind, every variant.
+    List(Str) kinds = [];
+    Bool k1 = check_text("value_kind every variant", str_join(kinds_of(all, 0, kinds), "|"),
+        "unit|a boolean|an integer|an unsigned integer|a 128-bit integer|an unsigned 128-bit integer|a float|a float|a string|bytes|none|an option|a sequence|a sequence|a map|a map|a struct|a struct|a struct|a unit variant|a unit variant|a newtype variant");
+
+    // ── value_eq: each variant equals itself and differs from the next.
+    Bool q1 = check("value_eq reflexive", all_self_equal(all, 0));
+    Bool q2 = check("value_eq distinct neighbours", all_neighbours_differ(all, 0));
+    Bool q3 = check("value_eq integers across widths", value_eq(VInt(5), VUInt(u64(5))) && value_eq(VUInt(u64(5)), VI128(i128(5))) && value_eq(VI128(i128(5)), VU128(u128(5))) && value_eq(VU128(u128(5)), VInt(5)));
+    Bool q4 = check("value_eq integer signs", !value_eq(VInt(-1), VUInt(u64(1))) && !value_eq(VI128(i128(-1)), VU128(u128(1))));
+    Bool q5 = check("value_eq huge u128", value_eq(VU128(u128(340282366920938463463374607431768211455)), VU128(u128(340282366920938463463374607431768211455))) && !value_eq(VU128(u128(340282366920938463463374607431768211455)), VI128(i128(-1))));
+    Bool q6 = check("value_eq names optional", value_eq(rec, vstruct("", [vfield("x", VInt(1)), vfield("y", VStr("s"))])) && !value_eq(rec, vstruct("R", [vfield("x", VInt(1)), vfield("y", VStr("s"))])));
+    Bool q7 = check("value_eq field order and names", !value_eq(rec, vstruct("P", [vfield("y", VStr("s")), vfield("x", VInt(1))])) && !value_eq(rec, vstruct("P", [vfield("x", VInt(1))])));
+    Bool q8 = check("value_eq variants", value_eq(VUnitVariant(tg), VUnitVariant(vtag("", 5, "V"))) && !value_eq(VUnitVariant(tg), VUnitVariant(vtag("F", 1, "V"))) && !value_eq(vvariant(tg, VInt(1)), vvariant(tg, VInt(2))));
+    Bool q9 = check("value_eq containers", !value_eq(VSeq([VInt(1)]), VSeq([VInt(1), VInt(2)])) && !value_eq(smap, VMap([ventry(VStr("x"), VInt(2))])) && !value_eq(VBytes([1]), VBytes([2])) && !value_eq(VFloat(1.0), VInt(1)));
+    Bool q10 = check("Eq(Value) ==", VSeq([VInt(1)]) == VSeq([VUInt(u64(1))]) && VStr("a") != VStr("b"));
+
+    // ── as_wide_int / as_wide_uint.
+    Bool w1 = check_text("as_wide_int", f"{as_wide_int(VInt(-2))} {as_wide_int(VU128(u128(340282366920938463463374607431768211455)))} {as_wide_int(VStr("x"))}", "Some(-2) None None");
+    Bool w2 = check_text("as_wide_uint", f"{as_wide_uint(VInt(-2))} {as_wide_uint(VI128(i128(7)))} {as_wide_uint(VUInt(u64(3)))} {as_wide_uint(VBool(true))}", "None Some(7) Some(3) None");
+
+    // ── Lookups.
+    Bool f1 = check_text("value_field struct/map/other", f"{value_field(rec, "y")} {value_field(smap, "z")} {value_field(smap, "q")} {value_field(imap, "1")} {value_field(VInt(1), "x")}", "Some(\"s\") Some(true) None None None");
+    Bool f2 = check_text("value_field_in", f"{value_field_in(rec, ["a", "y", "x"])} {value_field_in(rec, ["a"])}", "Some(\"s\") None");
+    Result(Int, SerialError) g1 = get_field(rec, "x");
+    Result(Int, SerialError) g2 = get_field(rec, "nope");
+    Result(Int, SerialError) g3 = get_field(rec, "y");
+    Bool f3 = check_text("get_field", sr(g1) + " " + sr(g2) + " " + sr(g3), "Ok(1) Err(missing field `nope`) Err(invalid type: expected an integer, found a string at .y)");
+    Result(Int, SerialError) g4 = get_field_or(rec, "nope", 7);
+    Result(Int, SerialError) g5 = get_field_or(rec, "y", 7);
+    Bool f4 = check_text("get_field_or", sr(g4) + " " + sr(g5), "Ok(7) Err(invalid type: expected an integer, found a string at .y)");
+    Result(Int, SerialError) g6 = get_field_in(smap, ["alias", "x"]);
+    Result(Int, SerialError) g7 = get_field_in(smap, ["first", "second"]);
+    Result(Int, SerialError) g8 = get_field_in_or(smap, ["q"], 3);
+    Result(Str, SerialError) g9 = get_field_in_or(smap, ["x"], "d");
+    Bool f5 = check_text("get_field_in(_or)", sr(g6) + " " + sr(g7) + " " + sr(g8) + " " + sr(g9), "Ok(2) Err(missing field `first`) Ok(3) Err(invalid type: expected a string, found an integer at .x)");
+
+    // ── is_unit_value, flatten_fields, without_fields.
+    Bool u1 = check("is_unit_value", is_unit_value(VUnit) && is_unit_value(VNone) && !is_unit_value(VInt(0)) && !is_unit_value(VSome(VUnit)));
+    Result(List(VField), SerialError) ff1 = flatten_fields(rec);
+    Result(List(VField), SerialError) ff2 = flatten_fields(smap);
+    Result(List(VField), SerialError) ff3 = flatten_fields(VUnit);
+    Result(List(VField), SerialError) ff4 = flatten_fields(imap);
+    Result(List(VField), SerialError) ff5 = flatten_fields(VSeq([]));
+    Bool l1 = check_text("flatten_fields", sr(ff1) + " " + sr(ff2) + " " + sr(ff3), "Ok([VField { name: \"x\", val: 1 }, VField { name: \"y\", val: \"s\" }]) Ok([VField { name: \"x\", val: 2 }, VField { name: \"z\", val: true }]) Ok([])");
+    Bool l2 = check_text("flatten_fields errors", sr(ff4) + " " + sr(ff5), "Err(invalid type: expected a string key, found an integer) Err(invalid type: expected a struct or map to flatten, found a sequence)");
+    Bool l3 = check_text("without_fields", f"{without_fields(rec, ["x"])} {without_fields(smap, ["x", "z"])} {without_fields(VInt(1), ["x"])}", "{ y: \"s\" } {} {}");
+
+    // ── Internal and adjacent tags.
+    Value tagged = vstruct("E", [vfield("type", VStr("V")), vfield("x", VInt(1))]);
+    Result(TagSplit, SerialError) t1 = split_internal_tag(tagged, "type");
+    Bool t1ok = check_text("split_internal_tag", match t1 { Ok(ts) => ts.variant + " " + f"{ts.rest}", Err(e) => f"{e}" }, "V { x: 1 }");
+    Result(TagSplit, SerialError) t2 = split_internal_tag(rec, "type");
+    Result(TagSplit, SerialError) t3 = split_internal_tag(vstruct("", [vfield("type", VInt(1))]), "type");
+    Bool t2ok = check_text("split_internal_tag errors", match t2 { Ok(a) => "ok?", Err(e) => f"{e}" } + " / " + match t3 { Ok(b) => "ok?", Err(e2) => f"{e2}" }, "missing field `type` / invalid type: expected a string tag `type`, found an integer");
+    Value adj = vstruct("", [vfield("t", VStr("V")), vfield("c", VSeq([]))]);
+    Result(TagSplit, SerialError) a1 = split_adjacent_tag(adj, "t", "c");
+    Result(TagSplit, SerialError) a2 = split_adjacent_tag(vstruct("", [vfield("t", VStr("U"))]), "t", "c");
+    Result(TagSplit, SerialError) a3 = split_adjacent_tag(anon, "t", "c");
+    Result(TagSplit, SerialError) a4 = split_adjacent_tag(vstruct("", [vfield("t", VBool(false))]), "t", "c");
+    Bool a1ok = check_text("split_adjacent_tag", match a1 { Ok(x) => x.variant + f" {x.rest}", Err(e) => f"{e}" } + " " + match a2 { Ok(y) => y.variant + f" {y.rest}", Err(e3) => f"{e3}" }, "V [] U ()");
+    Bool a2ok = check_text("split_adjacent_tag errors", match a3 { Ok(z) => "ok?", Err(e4) => f"{e4}" } + " / " + match a4 { Ok(w) => "ok?", Err(e5) => f"{e5}" }, "missing field `t` / invalid type: expected a string tag `t`, found a boolean");
+    Result(TokEnc, SerialError) wi1 = write_internally_tagged(token_encoder(), "E", "type", "V", rec);
+    Result(TokEnc, SerialError) wi2 = write_internally_tagged(token_encoder(), "E", "type", "U", VUnit);
+    Result(TokEnc, SerialError) wi3 = write_internally_tagged(token_encoder(), "E", "type", "N", VInt(3));
+    Bool i1 = check_text("write_internally_tagged", match wi1 { Ok(e) => f"{e.toks}", Err(x) => f"{x}" }, "[Struct(E, 3), Field(type), Str(\"V\"), Field(x), Int(1), Field(y), Str(\"s\"), StructEnd]");
+    Bool i2 = check_text("write_internally_tagged unit", match wi2 { Ok(e) => f"{e.toks}", Err(x) => f"{x}" }, "[Struct(E, 1), Field(type), Str(\"U\"), StructEnd]");
+    Bool i3 = check_text("write_internally_tagged non-struct payload", match wi3 { Ok(e) => "ok?", Err(x) => f"{x}" }, "invalid type: expected a struct or map to flatten, found an integer at ::N");
+    Result(TokEnc, SerialError) wa1 = write_adjacent(token_encoder(), "E", "t", "c", "V", [1]);
+    Result(TokEnc, SerialError) wa2 = write_adjacent_unit(token_encoder(), "E", "t", "U");
+    Bool i4 = check_text("write_adjacent", match wa1 { Ok(e) => f"{e.toks}", Err(x) => f"{x}" }, "[Struct(E, 2), Field(t), Str(\"V\"), Field(c), Seq(1), Int(1), SeqEnd, StructEnd]");
+    Bool i5 = check_text("write_adjacent_unit", match wa2 { Ok(e) => f"{e.toks}", Err(x) => f"{x}" }, "[Struct(E, 1), Field(t), Str(\"U\"), StructEnd]");
+    return 0;
+}
+
+List(Str) kinds_of(List(Value) vs, Int i, List(Str) acc) {
+    if (i >= vs.len()) { return acc; }
+    return kinds_of(vs, i + 1, acc.concat([value_kind(vs[i])]));
+}
+
+Bool all_self_equal(List(Value) vs, Int i) {
+    if (i >= vs.len()) { return true; }
+    return value_eq(vs[i], vs[i]) && all_self_equal(vs, i + 1);
+}
+
+// Neighbours in the list are different values (the two floats 1.5/2.0,
+// the two empty-ish sequences and so on were chosen to differ).
+Bool all_neighbours_differ(List(Value) vs, Int i) {
+    if (i + 1 >= vs.len()) { return true; }
+    if (value_eq(vs[i], vs[i + 1])) {
+        println(f"  equal neighbours: {vs[i]} and {vs[i + 1]}");
+        return false;
+    }
+    return all_neighbours_differ(vs, i + 1);
+}

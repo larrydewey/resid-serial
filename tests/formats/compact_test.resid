@@ -1,0 +1,90 @@
+// The positional compact format (no names, tags or ends in the data):
+// every builtin and derived shape round-trips, and what a
+// non-self-describing format cannot do fails cleanly.
+import "../derive/model.resid";
+import "../derive/model_serial.resid";
+import "../../src/serial.resid";
+import "../../src/value.resid";
+import "../check.resid";
+import "compact.resid";
+
+// Encode, decode back, and compare the shown values.
+@needs(Encode(T, CompactEnc), Decode(T, CompactDec), Show(T))
+Bool round(Str name, T x) {
+    Result(List(Int), SerialError) w = to_compact(x);
+    if (Err(e) = w) { return check_text(name, f"{e}", f"{x}"); }
+    List(Int) none = [];
+    Result(T, SerialError) back = from_compact(w else { none });
+    return check_text(name, match back { Ok(b) => f"{b}", Err(e2) => f"{e2}" }, f"{x}");
+}
+
+@needs(Show(T))
+Str sr(Result(T, SerialError) r) { return f"{r}"; }
+
+Int main() {
+    Bool a1 = round("bool", true);
+    Bool a2 = round("int", -5);
+    Bool a3 = round("narrow ints", [i8(-128), i8(127)]) && round("narrow uints", [u16(0), u16(65535)]);
+    Bool a4 = round("u64 in range", u64(9223372036854775807));
+    Bool a5 = round("i128", i128(-170141183460469231731687303715884105727)) && round("u128", u128(340282366920938463463374607431768211455));
+    Bool a6 = round("floats", [1.25, -0.5]) && round("f32", f32(2.5)) && round("f16", f16(0.75));
+    Bool a7 = round("str", "héllo") && round("empty str", "");
+    Dec(6) dz = d6("12.5");
+    Bool a8 = round("dec", dz);
+    Str(3) sz = "abc";
+    Bool a9 = round("Str(N)", sz);
+    Bytes(3) fb = b"hi";
+    Bool a9b = round("Bytes(N)", fb);
+    Bool a9c = check_text("streamed layouts equal whole ones", sr(to_compact(sz)) + " " + sr(to_compact("abc")) + " " + sr(to_compact(fb)) + " " + sr(to_compact(byte_buf([104, 105, 0]))),
+        "Ok([3, 97, 98, 99]) Ok([3, 97, 98, 99]) Ok([3, 104, 105, 0]) Ok([3, 104, 105, 0])");
+    Result(Str(2), SerialError) tl = from_compact([3, 97, 98, 99]);
+    Result(List(Int, 2), SerialError) tl2 = from_compact([3, 1, 2, 3]);
+    Bool a9d = check_text("fixed overflow through a positional format", sr(tl) + " | " + sr(tl2), "Err(invalid length 3, expected a string of at most 2 bytes) | Err(invalid length 3, expected a sequence of 2)");
+    Bool a10 = check_text("bytes", sr(from_compact_bytes(to_compact(byte_buf([0, 255])))), "Ok([0, 255])");
+    Bool a11 = round("unit", unit());
+    Option(Int) none = None;
+    Bool a12 = round("options", [Some(1), none]);
+    List(Int, 2) fx = [7, 8];
+    Bool a13 = round("List(T, N)", fx);
+    Set(Str) st = {"b", "a"};
+    Result(Set(Str), SerialError) stb = from_compact(to_compact(st) else { [] });
+    Bool a14 = check_text("set", match stb { Ok(s) => f"{sort(s.to_list())}", Err(e) => f"{e}" }, "[\"a\", \"b\"]");
+    Map(Str, List(Int)) m = {"a": [1, 2], "b": []};
+    Result(Map(Str, List(Int)), SerialError) mb = from_compact(to_compact(m) else { [] });
+    Bool a15 = check_text("map", match mb { Ok(x) => f"{to_value(x)}", Err(e) => f"{e}" }, "Ok({\"a\": [1, 2], \"b\": []})");
+    Result(Int, Str) rk = Ok(1);
+    Result(Int, Str) re = Err("e");
+    Bool a16 = round("result", [rk, re]);
+
+    Point p = Point {.x = 3, .y = -4};
+    Bool b1 = round("derived record", p);
+    Bool b2 = round("derived enum", [Circle(1.25), Square(p), Nothing]);
+    Pair(Option(Str)) pr = Pair {.first = Some("a"), .second = None};
+    Bool b3 = round("derived generic", pr);
+    Tree(Int) t = Node([Leaf(1), Node([Leaf(2), Leaf(3)])]);
+    Result(Tree(Int), SerialError) tb = from_compact(to_compact(t) else { [] });
+    Bool b4 = check("derived recursive", match tb { Ok(x) => value_eq(to_value(x) else { VNone }, to_value(t) else { VUnit }), Err(e) => false });
+    Bool b5 = round("transparent", Meters {.value = 2.0});
+    Bool b6 = check_text("positional layout", sr(to_compact(p)) + " " + sr(to_compact(Square(p))), "Ok([3, -4]) Ok([1, 3, -4])");
+
+    // What a positional format cannot do, and malformed input.
+    Result(Value, SerialError) e1 = from_compact([1]);
+    Result(Event, SerialError) e2 = from_compact(to_compact(Quit) else { [] });
+    Bool c1 = check_text("no untyped decoding", sr(e1) + " | " + sr(e2), "Err(decoding without a type is not supported by this format) | Err(decoding without a type is not supported by this format)");
+    Result(List(Int), SerialError) e3 = to_compact(u64(18446744073709551615));
+    Bool c2 = check_text("format-specific unsupported value", sr(e3), "Err(a UInt above Int's range is not supported by this format)");
+    Result(Point, SerialError) e4 = from_compact([3]);
+    Result(Point, SerialError) e5 = from_compact([3, 4, 5]);
+    Result(Shape, SerialError) e6 = from_compact([7]);
+    Result(Str, SerialError) e7 = from_compact([5, 97]);
+    Bool c3 = check_text("malformed input", str_join([sr(e4), sr(e5), sr(e6), sr(e7)], " | "),
+        "Err(unexpected end of input, expected an integer at .y) | Err(trailing input after the value: 1 word(s)) | Err(invalid value 7, expected a variant index of Shape) | Err(invalid length 5, expected a string)");
+    Bool c4 = check("compact is not human readable", !encodes_human_readable(compact_encoder()));
+    return 0;
+}
+
+Result(List(Int), SerialError) from_compact_bytes(Result(List(Int), SerialError) w) {
+    List(Int) none = [];
+    Result(ByteBuf, SerialError) b = from_compact(w else { none });
+    return match b { Ok(x) => Ok(x.bytes), Err(e) => Err(e) };
+}

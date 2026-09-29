@@ -1,0 +1,43 @@
+ok   default zero values
+ok   defaults round trip when present
+ok   skip_encoding and skip_decoding on encode
+ok   default fns, aliases, skip_decoding on decode
+ok   missing field without default
+ok   an alias duplicating the field
+ok   container rename is the struct name
+ok   rename_all fields
+ok   rename_all variants
+ok   renamed variants decode by the new name only
+ok   rename beats rename_all; container rename
+ok   encode only
+ok   decode only
+ok   parameter named F
+ok   two parameters
+ok   nested generic field types
+ok   generic transparent
+ok   empty record
+ok   deny_unknown_fields
+ok   flatten two fields, skip_encoding_if
+ok   flatten decodes in any order
+ok   flatten missing inner field
+ok   flatten a map
+ok   flatten streams through any encoder
+ok   external newtype
+ok   variant alias
+ok   skipped variant
+ok   variants after a skipped one
+ok   internal unit/struct/map
+ok   internal scalar payload
+ok   internal decode
+ok   internal decode errors
+ok   internal through tokens
+ok   internal back from tokens
+ok   adjacent unit
+ok   adjacent newtype
+ok   adjacent decode
+ok   untagged round trip
+ok   untagged no fit
+ok   untagged through tokens
+ok   skipped variant in another representation
+ok   generic internally tagged
+exit 0

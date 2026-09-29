@@ -1,0 +1,79 @@
+// The generated instances (model_serial.resid), checked against exact
+// tokens and round-tripped through Value.
+import "model.resid";
+import "model_serial.resid";
+import "../../src/serial.resid";
+import "../../src/value.resid";
+import "../../src/serial_test.resid";
+
+Str check(Str name, Bool ok) { return if (ok) { "ok   " + name } else { "FAIL " + name }; }
+
+VariantTok vt(Str e, Int i, Str v) { return variant_tok(e, i, v); }
+
+Int main() {
+    Point p = Point {.x = 1, .y = 2};
+    List(Token) pt = [TokStruct(struct_tok("Point", 2)), TokField("x"), TokInt(1), TokField("y"), TokInt(2), TokStructEnd];
+    println(check("point", assert_tokens(p, pt)));
+    Result(Point, SerialError) swapped = from_tokens([TokStruct(struct_tok("Point", 2)), TokField("y"), TokInt(2), TokField("x"), TokInt(1), TokStructEnd]);
+    println(f"swapped: {swapped}");
+    println(check("point missing", assert_de_error(p, [TokStruct(struct_tok("Point", 1)), TokField("x"), TokInt(1), TokStructEnd], "missing field `y`")));
+    println(check("point duplicate", assert_de_error(p, [TokStruct(struct_tok("Point", 3)), TokField("x"), TokInt(1), TokField("x"), TokInt(1), TokField("y"), TokInt(2), TokStructEnd], "duplicate field `x`")));
+    println(check("point unknown ignored", assert_de_error(p, [TokStruct(struct_tok("Point", 2)), TokField("z"), TokInt(9), TokField("x"), TokStr("bad"), TokStructEnd], "invalid type: expected Int, found Str(\"bad\") at .x")));
+
+    User u = User {.user_name = "ann", .login_count = 3, .email = None, .home_points = [p], .secret = "pw"};
+    List(Token) ut = [
+        TokStruct(struct_tok("User", 3)), TokField("login"), TokStr("ann"), TokField("loginCount"), TokInt(3),
+        TokField("homePoints"), TokSeq(1), TokStruct(struct_tok("Point", 2)), TokField("x"), TokInt(1), TokField("y"), TokInt(2), TokStructEnd, TokSeqEnd,
+        TokStructEnd
+    ];
+    println(check("user ser (rename, camelCase, skip_if, skip)", assert_ser_tokens(u, ut)));
+    Result(User, SerialError) ub = from_tokens([TokStruct(struct_tok("User", 2)), TokField("user"), TokStr("bo"), TokField("homePoints"), TokSeq(0), TokSeqEnd, TokStructEnd]);
+    println(f"user from alias, defaults: {ub}");
+    println(check("user deny unknown", assert_de_error(u, [TokStruct(struct_tok("User", 1)), TokField("extra"), TokInt(1), TokStructEnd], "unknown field `extra`, expected `login`, `user`, `loginCount`, `email` or `homePoints`")));
+    User u2 = User {.user_name = "cy", .login_count = 0, .email = Some("c@x"), .home_points = [], .secret = "hidden"};
+    println(check("user with email", assert_ser_tokens(u2, [TokStruct(struct_tok("User", 4)), TokField("login"), TokStr("cy"), TokField("loginCount"), TokInt(0), TokField("email"), TokSome, TokStr("c@x"), TokField("homePoints"), TokSeq(0), TokSeqEnd, TokStructEnd])));
+
+    println(check("shape circle", assert_tokens(Circle(2.5), [TokVariant(vt("Shape", 0, "circle")), TokFloat(2.5), TokVariantEnd])));
+    println(check("shape square", assert_tokens(Square(p), [TokVariant(vt("Shape", 1, "Square"))].concat(pt).concat([TokVariantEnd]))));
+    println(check("shape unit", assert_tokens(Nothing, [TokUnitVariant(vt("Shape", 2, "Nothing"))])));
+    Result(Shape, SerialError) alias = from_tokens([TokUnitVariant(vt("Shape", 2, "Empty"))]);
+    println(f"shape alias: {alias}");
+
+    Pair(Str) pr = Pair {.first = "a", .second = "b"};
+    println(check("generic pair", assert_tokens(pr, [TokStruct(struct_tok("Pair", 2)), TokField("first"), TokStr("a"), TokField("second"), TokStr("b"), TokStructEnd])));
+    Tree(Int) t = Node([Leaf(1), Node([Leaf(2)])]);
+    Value tv = to_value(t) else { VUnit };
+    println(f"tree value: {tv}");
+    Result(Tree(Int), SerialError) tb = from_value(tv);
+    println(check("generic recursive tree", match tb { Ok(x) => f"{to_value(x)}" == f"{to_value(t)}", Err(e) => false }));
+
+    println(check("transparent", assert_tokens(Meters {.value = 3.5}, [TokFloat(3.5)])));
+
+    Event ev = Click(p);
+    Value evv = to_value(ev) else { VUnit };
+    println(f"internal tag: {evv}");
+    Result(Event, SerialError) evb = from_value(evv);
+    println(f"internal back: {evb}");
+    Value quit = to_value(Quit) else { VUnit };
+    Result(Event, SerialError) qb = from_value(quit);
+    println(f"internal unit: {quit} -> {qb}");
+
+    Value mv = to_value(Text("hi")) else { VUnit };
+    Value pv = to_value(Ping) else { VUnit };
+    Result(Msg, SerialError) mb = from_value(mv);
+    Result(Msg, SerialError) pb = from_value(pv);
+    println(f"adjacent: {mv} {pv} -> {mb} {pb}");
+
+    List(Loose) ls = [Num(4), Word("w"), Pt(p)];
+    Value lv = to_value(ls) else { VUnit };
+    Result(List(Loose), SerialError) lb = from_value(lv);
+    println(f"untagged: {lv} -> {lb}");
+    Result(Loose, SerialError) lbad = from_value(VBool(true));
+    println(f"untagged error: {lbad}");
+
+    Wrapper w = Wrapper {.id = "w1", .pos = p};
+    Value wv = to_value(w) else { VUnit };
+    Result(Wrapper, SerialError) wb = from_value(wv);
+    println(f"flatten: {wv} -> {wb}");
+    return 0;
+}

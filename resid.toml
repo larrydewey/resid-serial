@@ -1,0 +1,8 @@
+[package]
+name = "resid-serial"
+version = "0.1.0"
+
+# The library itself is pure: no capabilities. tools/resid-derive needs
+# args and filesystem, granted to its own main.
+[capabilities]
+grant = []

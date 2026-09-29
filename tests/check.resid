@@ -1,0 +1,18 @@
+// check.resid — assertions for the self-checking tests. Each prints one
+// line: "ok   NAME", or "FAIL NAME" with what differed, so a golden file of
+// all-ok lines pins the whole suite.
+
+pub Bool check(Str name, Bool ok) {
+    println(if (ok) { "ok   " + name } else { "FAIL " + name });
+    return ok;
+}
+
+// Compare text: the shown form of a value against the expected one.
+pub Bool check_text(Str name, Str got, Str want) {
+    if (got == want) {
+        println("ok   " + name);
+        return true;
+    }
+    println("FAIL " + name + "\n       want " + want + "\n       got  " + got);
+    return false;
+}

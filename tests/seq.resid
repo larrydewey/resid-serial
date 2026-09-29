@@ -1,0 +1,72 @@
+// seq.resid: every Indexed and Build instance, the helpers, and the
+// fixed-capacity builders they rest on (overflow as a value, zero fill).
+import "../src/seq.resid";
+import "check.resid";
+
+@needs(Show(T))
+Str sr(Result(T, Int) r) { return f"{r}"; }
+
+List(T, N) zeroed() {
+    List(T, N) z = [];
+    return z;
+}
+
+Int main() {
+    // ── Indexed: counts and items of every instance.
+    List(Int) hl = [4, 5];
+    List(Int, 3) fl = [7, 8];
+    Str hs = "aé☃";
+    Str(8) fs = "xé";
+    Bytes(3) fb = b"q";
+    Bool i1 = check_text("Indexed List(T)", f"{count(hl)} {item(hl, 1)}", "2 5");
+    Bool i2 = check_text("Indexed List(T, N)", f"{count(fl)} {item(fl, 1)} {item(fl, 2)}", "3 8 0");
+    Bool i3 = check_text("Indexed Str (code points)", f"{count(hs)} {item(hs, 0)} {item(hs, 1)} {item(hs, 2)}", "3 97 233 9731");
+    Bool i4 = check_text("Indexed Str(N)", f"{count(fs)} {item(fs, 1)}", "2 233");
+    Bool i5 = check_text("Indexed Bytes(N)", f"{count(fb)} {item(fb, 0)} {item(fb, 2)}", "3 113 0");
+    Bool i6 = check_text("utf8_count / utf8_width", f"{utf8_count(hs)} {utf8_count(fs)} {utf8_width(127)} {utf8_width(128)} {utf8_width(2048)} {utf8_width(65536)}", "6 3 1 2 3 4");
+    Bool i7 = check_text("fold_items", f"{fold_items(fl, 0, lambda(a, x) { a + x })} {fold_items(hs, 0, lambda(a, c) { a + 1 })}", "15 3");
+    Bool i8 = check("all_items", all_items(hl, lambda(x) { x > 3 }) && !all_items(fl, lambda(x) { x > 0 }));
+    List(Int) empty = [];
+    Bool i9 = check("empty sequences", count(empty) == 0 && all_items(empty, lambda(x) { false }) && fold_items(empty, 9, lambda(a, x) { a * x }) == 9 && count("") == 0);
+
+    // ── Build: every instance through build_from, both within and past capacity.
+    Result(List(Int), Int) b1 = build_from(fl);
+    Result(List(Int, 3), Int) b2 = build_from(hl);
+    Result(List(Int, 1), Int) b3 = build_from(hl);
+    Result(Str, Int) b4 = build_from(fs);
+    Result(Str(4), Int) b5 = build_from(hs);
+    Result(Str(5), Int) b6 = build_from(hs);
+    Result(Str(8), Int) b7 = build_from(hs);
+    Result(Bytes(2), Int) b8 = build_from([1, 2]);
+    Result(Bytes(2), Int) b9 = build_from([1, 2, 3]);
+    Result(Bytes(4), Int) b10 = build_from(fb);
+    Bool c1 = check_text("Build List(T)", sr(b1), "Ok([7, 8, 0])");
+    Bool c2 = check_text("Build List(T, N) pads, overflows", sr(b2) + " " + sr(b3), "Ok([4, 5, 0]) Err(2)");
+    Bool c3 = check_text("Build Str", sr(b4), "Ok(\"xé\")");
+    Bool c4 = check_text("Build Str(N) by bytes, whole code points only", sr(b5) + " " + sr(b6) + " " + sr(b7), "Err(6) Err(6) Ok(\"aé☃\")");
+    Bool c5 = check_text("Build Bytes(N)", sr(b8) + " " + sr(b9) + " " + sr(b10), "Ok(b\"\\x01\\x02\") Err(3) Ok(b\"q\\x00\\x00\\x00\")");
+    Result(Str(3), Int) b11 = build_from("");
+    Bool c6 = check_text("Build from empty", sr(b11), "Ok(\"\")");
+
+    // ── The fixed builders directly: push, push_char, finish, try_finish, discard.
+    StrBuf(7) s0 = StrBuf();
+    Str(7) sv = s0.push("ab").push_char(233).push(fs).finish();
+    Bool d1 = check_text("StrBuf(N) push / push_char / finish", f"{sv} {str_len(sv)} {utf8_count(sv)} {sv.capacity()}", "abéxé 5 7 7");
+    StrBuf(3) s1 = StrBuf();
+    Result(Str(3), Int) so = s1.push("ab").push("cd").push("e").try_finish();
+    Bool d2 = check_text("StrBuf(N) keeps nothing after an overflowing push", sr(so), "Err(5)");
+    BytesBuf(2) y0 = BytesBuf();
+    Result(Bytes(2), Int) yo = y0.push(1).try_finish();
+    Bool d3 = check_text("BytesBuf(N) try_finish", sr(yo), "Ok(b\"\\x01\\x00\")");
+    ListBuf(Str, 2) l0 = ListBuf();
+    List(Str, 2) lv = l0.push("a").finish();
+    Bool d4 = check_text("ListBuf(T, N) zero-fills", f"{lv} {lv.len()}", "[\"a\", \"\"] 2");
+    ListBuf(Int, 2) l1 = ListBuf();
+    l1.discard();
+    StrBuf h0 = StrBuf();
+    h0.push("heap").discard();
+    Bool d5 = check("discard any builder", true);
+    List(Int, 4) z = zeroed();
+    Bool d6 = check_text("generic empty fixed literal", f"{z} {z.capacity()}", "[0, 0, 0, 0] 4");
+    return 0;
+}

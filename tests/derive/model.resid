@@ -1,0 +1,53 @@
+// Types for the derive tests; model_serial.resid is generated from the
+// //@ annotations by tools/resid-derive.
+
+//@ serial
+type Point = { Int x; Int y; };
+
+//@ serial(rename_all = "camelCase", deny_unknown_fields)
+type User = {
+    Str user_name;                  //@ rename = "login", alias = "user"
+    Int login_count;                //@ default
+    Option(Str) email;              //@ skip_encoding_if = "is_none_str"
+    List(Point) home_points;
+    Str secret;                     //@ skip, default = "no_secret"
+};
+
+pub Bool is_none_str(Option(Str) s) { return match s { Some(x) => false, None => true }; }
+pub Str no_secret() { return "hidden"; }
+
+//@ serial
+type Shape =
+    Circle(Float)                   //@ rename = "circle"
+  | Square(Point)
+  | Nothing;                        //@ alias = "Empty"
+
+//@ serial
+type Pair(T) = { T first; T second; };
+
+//@ serial
+type Tree(T) = Leaf(T) | Node(List(Tree(T)));
+
+//@ serial(transparent)
+type Meters = { Float value; };
+
+//@ serial(tag = "type")
+type Event = Click(Point) | Key(KeyPress) | Quit;
+
+//@ serial
+type KeyPress = { Str key; Bool shift; };
+
+//@ serial(tag = "t", content = "c")
+type Msg = Text(Str) | Ping;
+
+//@ serial(untagged)
+type Loose = Num(Int) | Word(Str) | Pt(Point);
+
+//@ serial
+type Wrapper = {
+    Str id;
+    Point pos;                      //@ flatten
+};
+
+// Not annotated: left alone.
+type Plain = { Int n; };

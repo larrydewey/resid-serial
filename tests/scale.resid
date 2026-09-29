@@ -1,0 +1,47 @@
+// Large and deeply nested values through each format, to catch quadratic
+// work and recursion limits (tests/run.sh also bounds its run time).
+import "../src/serial.resid";
+import "../src/value.resid";
+import "../src/serial_test.resid";
+import "formats/compact.resid";
+import "check.resid";
+
+List(Int) count_up(Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return count_up(i + 1, n, acc.push(i));
+}
+
+Map(Int, Str) numbered(Int i, Int n, Map(Int, Str) acc) {
+    if (i >= n) { return acc; }
+    return numbered(i + 1, n, acc.insert(i, f"n{i}"));
+}
+
+Value nest(Int depth, Value v) {
+    if (depth == 0) { return v; }
+    return nest(depth - 1, VSeq([VSome(v)]));
+}
+
+Int main() {
+    Int n = rt 100000;
+    List(Int) big = count_up(0, n, ListBuf());
+    Value bv = to_value(big) else { VUnit };
+    Result(List(Int), SerialError) bb = from_value(bv);
+    Bool a1 = check("100k list through Value", match bb { Ok(xs) => xs.len() == n && xs[n - 1] == n - 1, Err(e) => false });
+    List(Int) cw = to_compact(big) else { [] };
+    Result(List(Int), SerialError) cb = from_compact(cw);
+    Bool a2 = check("100k list through compact", cw.len() == n + 1 && match cb { Ok(ys) => ys.len() == n && ys[12345] == 12345, Err(e2) => false });
+    List(Int) mid = count_up(0, rt 20000, ListBuf());
+    Result(List(Token), SerialError) tk = to_tokens(mid);
+    List(Token) none = [];
+    Result(List(Int), SerialError) tb = from_tokens(tk else { none });
+    Bool a3 = check("20k list through tokens", match tb { Ok(zs) => zs.len() == 20000, Err(e3) => false });
+    Map(Int, Str) m = numbered(0, rt 20000, {});
+    Value mv = to_value(m) else { VUnit };
+    Result(Map(Int, Str), SerialError) mb = from_value(mv);
+    Bool a4 = check("20k map through Value", match mb { Ok(mm) => mm.len() == 20000 && (mm.get(19999) else { "" }) == "n19999", Err(e4) => false });
+    Value deep = nest(rt 2000, VInt(1));
+    Result(Value, SerialError) dr = to_value(deep);
+    Result(Value, SerialError) dt = from_tokens(to_tokens(deep) else { none });
+    Bool a5 = check("depth 2000 nesting", match dr { Ok(v) => value_eq(v, deep), Err(e5) => false } && match dt { Ok(v2) => value_eq(v2, deep), Err(e6) => false });
+    return 0;
+}

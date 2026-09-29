@@ -1,0 +1,162 @@
+// serial_test.resid itself: token Show/Eq, every token-decoder path
+// (skipping nested values, peeking, variants, names, ends) and what each
+// assertion reports when it fails.
+import "../src/serial.resid";
+import "../src/value.resid";
+import "../src/serial_test.resid";
+import "check.resid";
+
+VariantTok vt(Str e, Int i, Str v) { return variant_tok(e, i, v); }
+
+@needs(Show(T))
+Str sr(Result(T, SerialError) r) { return f"{r}"; }
+
+// A record that knows one field; unknown ones are skipped.
+type One = { Int a; };
+List(Str) one_fields() { return ["a"]; }
+@needs(Encoder(F))
+Result(F, SerialError) enc_one(One o, F s) { return write_struct1(s, "One", "a", o.a); }
+Encode(One, F) = enc_one;
+@needs(Decoder(F))
+Result(Parsed(One, F), SerialError) dec_one(F s) {
+    Parsed(Int, F) p = read_struct1(s, "One", "a")?;
+    return parsed(One {.a = p.value}, p.rest);
+}
+Decode(One, F) = dec_one;
+
+// An encoder that always fails.
+type Nope = { Int n; };
+@needs(Encoder(F))
+Result(F, SerialError) enc_nope(Nope x, F s) { return Err(custom_error("cannot encode Nope")); }
+Encode(Nope, F) = enc_nope;
+
+List(Token) every_token() {
+    return [
+        TokUnit, TokBool(true), TokInt(-1), TokUInt(u64(1)), TokI128(i128(-2)), TokU128(u128(2)), TokFloat(0.5), TokStr("s"),
+        TokBytes([9]), TokNone, TokSome, TokSeq(1), TokSeqEnd, TokMap(1), TokMapEnd, TokStruct(struct_tok("S", 1)),
+        TokField("f"), TokStructEnd, TokUnitVariant(vt("E", 0, "U")), TokVariant(vt("E", 1, "V")), TokVariantEnd
+    ];
+}
+
+Int main() {
+    List(Token) all = every_token();
+    Bool s1 = check_text("show_token every token", f"{all}",
+        "[Unit, Bool(true), Int(-1), UInt(1), I128(-2), U128(2), Float(0.5), Str(\"s\"), Bytes([9]), None, Some, Seq(1), SeqEnd, Map(1), MapEnd, Struct(S, 1), Field(f), StructEnd, UnitVariant(E::U #0), Variant(E::V #1), VariantEnd]");
+    Bool s2 = check("token_eq reflexive", all_self_eq(all, 0));
+    Bool s3 = check("token_eq distinct neighbours", all_neighbours_differ(all, 0));
+    Bool s4 = check("token_eq payloads", !token_eq(TokInt(1), TokInt(2)) && !token_eq(TokStruct(struct_tok("S", 1)), TokStruct(struct_tok("S", 2))) && !token_eq(TokStruct(struct_tok("S", 1)), TokStruct(struct_tok("T", 1)))
+        && !token_eq(TokVariant(vt("E", 1, "V")), TokVariant(vt("E", 2, "V"))) && !token_eq(TokVariant(vt("E", 1, "V")), TokVariant(vt("F", 1, "V"))) && !token_eq(TokBytes([1]), TokBytes([2])) && !token_eq(TokField("a"), TokField("b")));
+    Bool s5 = check("Eq(Token) ==", TokStr("a") == TokStr("a") && TokSeq(1) != TokSeq(2));
+    Bool s6 = check_text("to_tokens", sr(to_tokens(Some(1))), "Ok([Some, Int(1)])");
+    Bool s7 = check("token encoder/decoder are human readable", encodes_human_readable(token_encoder()) && decodes_human_readable(token_decoder([])));
+
+    // ── Skipping every kind of value after an unknown field.
+    List(Token) head = [TokStruct(struct_tok("One", 2)), TokField("x")];
+    List(Token) tail = [TokField("a"), TokInt(1), TokStructEnd];
+    List(List(Token)) skipped = [
+        [TokInt(5)], [TokSome, TokStr("x")], [TokSome, TokSome, TokNone], [TokSeq(2), TokInt(1), TokSeq(1), TokNone, TokSeqEnd, TokSeqEnd],
+        [TokMap(1), TokStr("k"), TokMap(0), TokMapEnd, TokMapEnd], [TokStruct(struct_tok("Z", 1)), TokField("q"), TokSome, TokStruct(struct_tok("Y", 0)), TokStructEnd, TokStructEnd],
+        [TokUnitVariant(vt("E", 0, "U"))], [TokVariant(vt("E", 1, "V")), TokSeq(0), TokSeqEnd, TokVariantEnd], [TokUnit], [TokBytes([1])]
+    ];
+    Bool k1 = check("read_skip every value kind", skips_ok(head, tail, skipped, 0));
+    Result(One, SerialError) ktr = from_tokens([TokStruct(struct_tok("One", 1)), TokField("x"), TokSeq(1), TokInt(1)]);
+    Bool k2 = check_text("read_skip unterminated", sr(ktr), "Err(unexpected end of input, expected a value)");
+
+    // ── Peek every value token; peeking an end marker or nothing fails.
+    Bool p1 = check_text("read_peek every value token", str_join(peeks(all, 0, []), ","),
+        "unit,a boolean,an integer,an unsigned integer,a 128-bit integer,an unsigned 128-bit integer,a float,a string,bytes,none,an option,a sequence,-,a map,-,a struct,-,-,an enum variant,an enum variant,-");
+    Result(Parsed(Peek, TokDec), SerialError) pe = read_peek(token_decoder([]));
+    Bool p2 = check_text("read_peek at end", match pe { Ok(p) => "ok?", Err(e) => f"{e}" }, "unexpected end of input, expected a value");
+    Result(Parsed(Peek, TokDec), SerialError) pn = read_peek(token_decoder([TokStruct(struct_tok("Named", 0))]));
+    Bool p3 = check_text("read_peek struct name", match pn { Ok(p) => match (p.value) { PeekStruct(n) => n, _ => "?" }, Err(e) => f"{e}" }, "Named");
+
+    // ── Structs: names, anonymous, field expectations.
+    Result(One, SerialError) n1 = from_tokens([TokStruct(struct_tok("Two", 1)), TokField("a"), TokInt(1), TokStructEnd]);
+    Bool n1ok = check_text("struct name mismatch", sr(n1), "Err(invalid type: expected struct One, found struct Two)");
+    Result(Value, SerialError) n2 = from_tokens([TokStruct(struct_tok("Any", 0)), TokStructEnd]);
+    Bool n2ok = check_text("untyped struct keeps its name", sr(n2), "Ok(Any {})");
+    Result(One, SerialError) n3 = from_tokens([TokStruct(struct_tok("One", 1)), TokInt(1)]);
+    Bool n3ok = check_text("field expected", sr(n3), "Err(invalid type: expected Field or StructEnd, found Int(1))");
+    Result(One, SerialError) n4 = from_tokens([TokSeq(0)]);
+    Bool n4ok = check_text("struct expected", sr(n4), "Err(invalid type: expected Struct(One), found Seq(0))");
+
+    // ── Variants.
+    Result(Parsed(VariantName, TokDec), SerialError) vn = read_variant_name(token_decoder([TokVariant(vt("E", 3, "V"))]));
+    Bool v1 = check_text("read_variant_name", match vn { Ok(p) => p.value.enum_name + f" {p.value.index} " + p.value.name + f" {p.value.has_payload}", Err(e) => f"{e}" }, "E 3 V true");
+    Result(Parsed(VariantName, TokDec), SerialError) vn2 = read_variant_name(token_decoder([TokInt(1)]));
+    Bool v2 = check_text("read_variant_name wrong token", match vn2 { Ok(p) => "ok?", Err(e) => f"{e}" }, "invalid type: expected a variant, found Int(1)");
+    Result(TokDec, SerialError) ve = read_variant_end(token_decoder([TokSeqEnd]));
+    Bool v3 = check_text("read_variant_end wrong token", match ve { Ok(d) => "ok?", Err(e) => f"{e}" }, "invalid type: expected VariantEnd, found SeqEnd");
+
+    // ── Streaming: a streamed string or bytes becomes one token; misuse fails.
+    TokEnc ze0 = token_encoder();
+    Result(TokEnc, SerialError) st1 = write_str_begin(ze0, 2, 3);
+    Result(TokEnc, SerialError) st2 = match st1 { Ok(e) => write_str_char(e, 104), Err(x) => Err(x) };
+    Result(TokEnc, SerialError) st3 = match st2 { Ok(e) => write_str_char(e, 233), Err(x) => Err(x) };
+    Result(TokEnc, SerialError) st4 = match st3 { Ok(e) => write_str_end(e), Err(x) => Err(x) };
+    Bool zw1 = check_text("streamed string is one Str token", match st4 { Ok(e) => f"{e.toks}", Err(x) => f"{x}" }, "[Str(\"hé\")]");
+    Result(TokEnc, SerialError) bt1 = write_bytes_begin(token_encoder(), 1);
+    Result(TokEnc, SerialError) bt2 = match bt1 { Ok(e) => write_byte(e, 7), Err(x) => Err(x) };
+    Result(TokEnc, SerialError) bt3 = match bt2 { Ok(e) => write_bytes_end(e), Err(x) => Err(x) };
+    Bool zw2 = check_text("streamed bytes are one Bytes token", match bt3 { Ok(e) => f"{e.toks}", Err(x) => f"{x}" }, "[Bytes([7])]");
+    Result(TokEnc, SerialError) zm1 = write_str_char(token_encoder(), 1);
+    Result(TokEnc, SerialError) zm2 = match st1 { Ok(e) => write_int(e, 1), Err(x) => Err(x) };
+    Result(TokEnc, SerialError) zm3 = match st1 { Ok(e) => write_bytes_end(e), Err(x) => Err(x) };
+    Result(TokEnc, SerialError) zm4 = match st1 { Ok(e) => write_str_begin(e, 0, 0), Err(x) => Err(x) };
+    Result(TokEnc, SerialError) zm5 = match st1 { Ok(e) => write_seq_elem(e), Err(x) => Err(x) };
+    Bool zw3 = check_text("stream misuse", str_join([te_err(zm1), te_err(zm2), te_err(zm3), te_err(zm4), te_err(zm5)], " | "),
+        "write_str_char outside a string | a value inside a streamed string or bytes | write_bytes_end outside bytes | a stream inside a streamed string or bytes | a separator inside a streamed string or bytes");
+    Str(4) zf4 = "ab";
+    Bytes(2) zb2 = b"a";
+    Bool zw4 = check("Str(N) and Bytes(N) tokens are the whole ones'", assert_tokens(zf4, [TokStr("ab")]) && assert_tokens(zb2, [TokBytes([97, 0])]));
+    Result(Parsed(Int, TokDec), SerialError) zp1 = read_str_next(token_decoder([TokStr("a")]));
+    Result(Parsed(Int, TokDec), SerialError) zp2 = read_bytes_next(token_decoder([TokBytes([1])]));
+    Result(Parsed(Int, TokDec), SerialError) zp3 = read_str_begin(token_decoder([TokInt(1)]));
+    Result(Parsed(Int, TokDec), SerialError) zp4 = read_bytes_begin(token_decoder([TokStr("a")]));
+    Bool zw5 = check_text("pulling misuse", str_join([td_err(zp1), td_err(zp2), td_err(zp3), td_err(zp4)], " | "),
+        "read_str_next without read_str_begin | read_bytes_next without read_bytes_begin | invalid type: expected Str, found Int(1) | invalid type: expected Bytes, found Str(\"a\")");
+
+    // ── Assertion failure reports (printed below this line on purpose).
+    println("-- expected failure reports:");
+    Bool f1 = check("assert_ser_tokens reports a mismatch", !assert_ser_tokens(1, [TokInt(2)]));
+    Bool f2 = check("assert_ser_tokens reports an encode failure", !assert_ser_tokens(Nope {.n = 0}, [TokUnit]));
+    Bool f3 = check("assert_de_tokens reports a decode failure", !assert_de_tokens(1, [TokStr("x")]));
+    Bool f4 = check("assert_de_tokens reports a re-encode mismatch", !assert_de_tokens(dup_sample(), [TokMap(2), TokStr("a"), TokInt(1), TokStr("a"), TokInt(5), TokMapEnd]));
+    Bool f5 = check("assert_tokens fails when one side fails", !assert_tokens(1, [TokInt(2)]));
+    Bool f6 = check("assert_de_error reports a wrong error", !assert_de_error(1, [TokStr("x")], "some other message"));
+    Bool f7 = check("assert_de_error reports success", !assert_de_error(1, [TokInt(1)], "anything"));
+    return 0;
+}
+
+Str te_err(Result(TokEnc, SerialError) r) { return match r { Ok(e) => "ok?", Err(x) => f"{x}" }; }
+Str td_err(Result(Parsed(Int, TokDec), SerialError) r) { return match r { Ok(p) => "ok?", Err(x) => f"{x}" }; }
+
+Map(Str, Int) dup_sample() {
+    Map(Str, Int) m = {};
+    return m;
+}
+
+Bool all_self_eq(List(Token) ts, Int i) {
+    if (i >= ts.len()) { return true; }
+    return token_eq(ts[i], ts[i]) && all_self_eq(ts, i + 1);
+}
+
+Bool all_neighbours_differ(List(Token) ts, Int i) {
+    if (i + 1 >= ts.len()) { return true; }
+    return !token_eq(ts[i], ts[i + 1]) && all_neighbours_differ(ts, i + 1);
+}
+
+Bool skips_ok(List(Token) head, List(Token) tail, List(List(Token)) vs, Int i) {
+    if (i >= vs.len()) { return true; }
+    Result(One, SerialError) r = from_tokens(head.concat(vs[i]).concat(tail));
+    Bool ok = match r { Ok(o) => o.a == 1, Err(e) => false };
+    if (!ok) { println(f"  skip failed for {vs[i]}: {r}"); }
+    return ok && skips_ok(head, tail, vs, i + 1);
+}
+
+List(Str) peeks(List(Token) ts, Int i, List(Str) acc) {
+    if (i >= ts.len()) { return acc; }
+    Result(Parsed(Peek, TokDec), SerialError) r = read_peek(token_decoder([ts[i]]));
+    Str s = match r { Ok(p) => f"{p.value}", Err(e) => "-" };
+    return peeks(ts, i + 1, acc.concat([s]));
+}

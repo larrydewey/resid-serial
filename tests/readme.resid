@@ -1,0 +1,167 @@
+// The README's examples, compiled and run (tests/run.sh regenerates the
+// derived region with resid-derive --inplace).
+import "../src/serial.resid";
+import "../src/value.resid";
+import "../src/serial_test.resid";
+
+//@ serial(rename_all = "camelCase")
+type User = { Str user_name; Option(Str) email; List(Int) scores; };
+
+//@ serial(deny_unknown_fields)
+type Config = {
+    Str host;                     //@ rename = "hostname", alias = "server"
+    Int port;                     //@ default = "default_port"
+    Option(Str) note;             //@ skip_encoding_if = "is_none_str"
+    Str secret;                   //@ skip, default
+};
+
+//@ serial(tag = "kind", rename_all = "snake_case")
+type Event = Started(Config) | Stopped;
+
+pub Int default_port() { return 8080; }
+pub Bool is_none_str(Option(Str) s) { return match s { Some(x) => false, None => true }; }
+
+type Point = { Int x; Int y; };
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_point(Point p, F s) {
+    F s1 = write_struct_begin(s, "Point", 2)?;
+    F s2 = write_named(s1, "x", p.x)?;
+    F s3 = write_named(s2, "y", p.y)?;
+    return write_struct_end(s3);
+}
+Encode(Point, F) = enc_point;
+
+Int main() {
+    User u = User {.user_name = "ann", .email = None, .scores = [3, 5]};
+    Value v = to_value(u) else { VUnit };
+    println(f"{v}");
+    Result(User, SerialError) back = from_value(v);
+    println(f"{back}");
+
+    Value cfg = vstruct("", [vfield("server", VStr("db")), vfield("note", VNone)]);
+    Result(Config, SerialError) c = from_value(cfg);
+    println(f"{c}");
+    Event ev = Started(Config {.host = "h", .port = 1, .note = None, .secret = "s"});
+    println(f"{to_value(ev)}");
+
+    Bool ok = assert_ser_tokens(Point {.x = 1, .y = 2}, [
+        TokStruct(struct_tok("Point", 2)),
+        TokField("x"), TokInt(1), TokField("y"), TokInt(2),
+        TokStructEnd
+    ]);
+    println(f"assert_ser_tokens {ok}");
+    return 0;
+}
+
+// ==== resid-derive: begin generated code (do not edit) ====
+// From the //@ serial annotations above; rerun resid-derive --inplace to update.
+
+// ── User (line 8)
+pub List(Str) derive_user_names() { return ["userName", "email", "scores"]; }
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_user_encode(User v, F s) {
+    Int n = 3;
+    F s0 = write_struct_begin(s, "User", n)?;
+    F s1 = write_named(s0, "userName", v.user_name)?;
+    F s2 = write_named(s1, "email", v.email)?;
+    F s3 = write_named(s2, "scores", v.scores)?;
+    return write_struct_end(s3);
+}
+Encode(User, F) = derive_user_encode;
+@needs(Decoder(F))
+pub Result(Parsed(User, F), SerialError) derive_user_decode(F s) {
+    F s0 = read_struct_begin(s, "User", derive_user_names())?;
+    return derive_user_fields(s0, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(User, F), SerialError) derive_user_fields(F s, Option(Str) f_user_name, Option(Option(Str)) f_email, Option(List(Int)) f_scores) {
+    Parsed(FieldKey, F) k = read_field(s, derive_user_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_user_field(k.rest, i, f_user_name, f_email, f_scores),
+        UnknownField(name) => derive_user_fields(skip_unknown(k.rest, name, derive_user_names(), false)?, f_user_name, f_email, f_scores),
+        EndOfFields => derive_user_done(k.rest, f_user_name, f_email, f_scores)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(User, F), SerialError) derive_user_field(F s, Int i, Option(Str) f_user_name, Option(Option(Str)) f_email, Option(List(Int)) f_scores) {
+    if (i == 0) { Parsed(Option(Str), F) p = read_slot(s, f_user_name, "userName")?; return derive_user_fields(p.rest, p.value, f_email, f_scores); }
+    if (i == 1) { Parsed(Option(Option(Str)), F) p = read_slot(s, f_email, "email")?; return derive_user_fields(p.rest, f_user_name, p.value, f_scores); }
+    Parsed(Option(List(Int)), F) p = read_slot(s, f_scores, "scores")?; return derive_user_fields(p.rest, f_user_name, f_email, p.value);
+}
+Result(Parsed(User, F), SerialError) derive_user_done(F s, Option(Str) f_user_name, Option(Option(Str)) f_email, Option(List(Int)) f_scores) {
+    Str d_user_name = require(f_user_name, "userName")?;
+    Option(Str) d_email_absent = None;
+    Option(Str) d_email = or_default(f_email, d_email_absent);
+    List(Int) d_scores = require(f_scores, "scores")?;
+    return parsed(User {.user_name = d_user_name, .email = d_email, .scores = d_scores}, s);
+}
+Decode(User, F) = derive_user_decode;
+
+// ── Config (line 11)
+pub List(Str) derive_config_names() { return ["hostname", "server", "port", "note"]; }
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_config_encode(Config v, F s) {
+    Int n = 2 + (if (is_none_str(v.note)) { 0 } else { 1 });
+    F s0 = write_struct_begin(s, "Config", n)?;
+    F s1 = write_named(s0, "hostname", v.host)?;
+    F s2 = write_named(s1, "port", v.port)?;
+    F s3 = write_named_if(s2, !is_none_str(v.note), "note", v.note)?;
+    return write_struct_end(s3);
+}
+Encode(Config, F) = derive_config_encode;
+@needs(Decoder(F))
+pub Result(Parsed(Config, F), SerialError) derive_config_decode(F s) {
+    F s0 = read_struct_begin(s, "Config", derive_config_names())?;
+    return derive_config_fields(s0, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(Config, F), SerialError) derive_config_fields(F s, Option(Str) f_host, Option(Int) f_port, Option(Option(Str)) f_note) {
+    Parsed(FieldKey, F) k = read_field(s, derive_config_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_config_field(k.rest, i, f_host, f_port, f_note),
+        UnknownField(name) => derive_config_fields(skip_unknown(k.rest, name, derive_config_names(), true)?, f_host, f_port, f_note),
+        EndOfFields => derive_config_done(k.rest, f_host, f_port, f_note)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(Config, F), SerialError) derive_config_field(F s, Int i, Option(Str) f_host, Option(Int) f_port, Option(Option(Str)) f_note) {
+    if (i >= 0 && i < 2) { Parsed(Option(Str), F) p = read_slot(s, f_host, "hostname")?; return derive_config_fields(p.rest, p.value, f_port, f_note); }
+    if (i == 2) { Parsed(Option(Int), F) p = read_slot(s, f_port, "port")?; return derive_config_fields(p.rest, f_host, p.value, f_note); }
+    Parsed(Option(Option(Str)), F) p = read_slot(s, f_note, "note")?; return derive_config_fields(p.rest, f_host, f_port, p.value);
+}
+Result(Parsed(Config, F), SerialError) derive_config_done(F s, Option(Str) f_host, Option(Int) f_port, Option(Option(Str)) f_note) {
+    Str d_host = require(f_host, "hostname")?;
+    Int d_port_absent = default_port();
+    Int d_port = or_default(f_port, d_port_absent);
+    Option(Str) d_note_absent = None;
+    Option(Str) d_note = or_default(f_note, d_note_absent);
+    Str d_secret = "";
+    return parsed(Config {.host = d_host, .port = d_port, .note = d_note, .secret = d_secret}, s);
+}
+Decode(Config, F) = derive_config_decode;
+
+// ── Event (line 19)
+pub List(Str) derive_event_variants() { return ["started", "stopped"]; }
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_event_encode(Event v, F s) {
+    return match v {
+        Started(x) => write_internally_tagged(s, "Event", "kind", "started", to_value(x)?),
+        Stopped => write_internally_tagged(s, "Event", "kind", "stopped", VUnit)
+    };
+}
+Encode(Event, F) = derive_event_encode;
+@needs(Decoder(F))
+pub Result(Parsed(Event, F), SerialError) derive_event_decode(F s) {
+    Parsed(Value, F) pv = decode(s)?;
+    Value v = pv.value;
+    TagSplit ts = split_internal_tag(v, "kind")?;
+    Int i = name_index(derive_event_variants(), ts.variant);
+    if (i == 0) { Result(Config, SerialError) r0 = from_value(ts.rest); Config x0 = at_variant(r0, "started")?; Event u0 = Started(x0); return parsed(u0, pv.rest); }
+    if (i == 1) { Event u1 = Stopped; return parsed(u1, pv.rest); }
+    return Err(unknown_variant(ts.variant, derive_event_variants()));
+}
+Decode(Event, F) = derive_event_decode;
+// ==== resid-derive: end generated code ====

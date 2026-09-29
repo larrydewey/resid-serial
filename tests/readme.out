@@ -1,0 +1,6 @@
+User { userName: "ann", email: None, scores: [3, 5] }
+Ok(User { user_name: "ann", email: None, scores: [3, 5] })
+Ok(Config { host: "db", port: 8080, note: None, secret: "" })
+Ok(Event { kind: "started", hostname: "h", port: 1 })
+assert_ser_tokens true
+exit 0

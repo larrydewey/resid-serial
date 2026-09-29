@@ -1,0 +1,169 @@
+// Every resid-derive option, checked against exact tokens and Values
+// (options_serial.resid is generated from options.resid).
+import "options.resid";
+import "options_serial.resid";
+import "../../src/serial.resid";
+import "../../src/value.resid";
+import "../../src/serial_test.resid";
+import "../check.resid";
+
+VariantTok vt(Str e, Int i, Str v) { return variant_tok(e, i, v); }
+StructTok st(Str n, Int l) { return struct_tok(n, l); }
+
+@needs(Show(T))
+Str sr(Result(T, SerialError) r) { return f"{r}"; }
+
+Str tv(Result(Value, SerialError) r) { return sr(r); }
+
+Int main() {
+    // ── Zero values: an empty struct decodes to every default.
+    Result(Zeros, SerialError) z = from_tokens([TokStruct(st("Zeros", 0)), TokStructEnd]);
+    Bool z1 = check_text("default zero values", sr(z), "Ok(Zeros { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0, g: \"\", h: false, i: None, j: [], k: {}, l: {}, m: 0, n: \"\", o: b\"\\x00\\x00\", p: [0, 0] })");
+    Bool z2 = check("defaults round trip when present", assert_tokens(Zeros {.a = 1, .b = i8(2), .c = u64(3), .d = u16(4), .e = 5.5, .f = f32(6.5), .g = "g", .h = true, .i = Some(9), .j = ["j"], .k = {"k": 1}, .l = {7}, .m = i128(8), .n = "nn", .o = b"o", .p = [1, 2]}, [
+        TokStruct(st("Zeros", 16)), TokField("a"), TokInt(1), TokField("b"), TokInt(2), TokField("c"), TokUInt(u64(3)), TokField("d"), TokUInt(u64(4)),
+        TokField("e"), TokFloat(5.5), TokField("f"), TokFloat(6.5), TokField("g"), TokStr("g"), TokField("h"), TokBool(true), TokField("i"), TokSome, TokInt(9),
+        TokField("j"), TokSeq(1), TokStr("j"), TokSeqEnd, TokField("k"), TokMap(1), TokStr("k"), TokInt(1), TokMapEnd, TokField("l"), TokSeq(1), TokInt(7), TokSeqEnd,
+        TokField("m"), TokI128(i128(8)), TokField("n"), TokStr("nn"), TokField("o"), TokBytes([111, 0]), TokField("p"), TokSeq(2), TokInt(1), TokInt(2), TokSeqEnd, TokStructEnd]));
+
+    // ── Knobs: default = fn, aliases, skip_encoding, skip_decoding, container rename.
+    Knobs kn = Knobs {.answer = 1, .seeds = [3], .name = "n", .note = "unseen", .count = 2};
+    Bool k1 = check("skip_encoding and skip_decoding on encode", assert_ser_tokens(kn, [TokStruct(st("Knobs", 4)), TokField("answer"), TokInt(1), TokField("seeds"), TokSeq(1), TokInt(3), TokSeqEnd, TokField("note"), TokStr("unseen"), TokField("count"), TokInt(2), TokStructEnd]));
+    Result(Knobs, SerialError) kd = from_tokens([TokStruct(st("Knobs", 3)), TokField("s3"), TokStr("via alias"), TokField("note"), TokStr("ignored"), TokField("n"), TokInt(5), TokStructEnd]);
+    Bool k2 = check_text("default fns, aliases, skip_decoding on decode", sr(kd), "Ok(Knobs { answer: 42, seeds: [1, 2], name: \"via alias\", note: \"\", count: 5 })");
+    Result(Knobs, SerialError) kd2 = from_tokens([TokStruct(st("Knobs", 2)), TokField("s1"), TokSeq(0), TokSeqEnd, TokField("count"), TokInt(1), TokStructEnd]);
+    Bool k3 = check_text("missing field without default", sr(kd2), "Err(missing field `name`)");
+    Result(Knobs, SerialError) kd3 = from_tokens([TokStruct(st("Knobs", 3)), TokField("name"), TokStr("a"), TokField("s2"), TokStr("b"), TokField("count"), TokInt(1), TokStructEnd]);
+    Bool k4 = check_text("an alias duplicating the field", sr(kd3), "Err(duplicate field `name`)");
+    Result(Knobs, SerialError) kd4 = from_tokens([TokStruct(st("Wrong", 0)), TokStructEnd]);
+    Bool k5 = check_text("container rename is the struct name", sr(kd4), "Err(invalid type: expected struct Knobs, found struct Wrong)");
+
+    // ── rename_all on fields and variants.
+    Bool r1 = check_text("rename_all fields", str_join([
+        field_names(to_tokens(RLower {.first_name = 1, .id = 2})), field_names(to_tokens(RUpper {.first_name = 1, .id = 2})),
+        field_names(to_tokens(RPascal {.first_name = 1, .id = 2})), field_names(to_tokens(RCamel {.first_name = 1, .id = 2})),
+        field_names(to_tokens(RSnake {.first_name = 1, .id = 2})), field_names(to_tokens(RScreaming {.first_name = 1, .id = 2})),
+        field_names(to_tokens(RKebab {.first_name = 1, .id = 2})), field_names(to_tokens(RScreamingKebab {.first_name = 1, .id = 2}))], " | "),
+        "first_name,id | FIRST_NAME,ID | FirstName,Id | firstName,id | first_name,id | FIRST_NAME,ID | first-name,id | FIRST-NAME,ID");
+    Bool r2 = check_text("rename_all variants", str_join([
+        variant_of(to_tokens(LowerVariant)), variant_of(to_tokens(UpperVariant)), variant_of(to_tokens(PascalVariant)),
+        variant_of(to_tokens(CamelVariant)), variant_of(to_tokens(SnakeVariant)), variant_of(to_tokens(ScreamingVariant)),
+        variant_of(to_tokens(KebabVariant)), variant_of(to_tokens(ScreamingKebabVariant))], " | "),
+        "lowervariant | UPPERVARIANT | PascalVariant | camelVariant | snake_variant | SCREAMING_VARIANT | kebab-variant | SCREAMING-KEBAB-VARIANT");
+    Result(VKebab, SerialError) rb = from_tokens([TokUnitVariant(vt("VKebab", 1, "kebab-two"))]);
+    Result(VKebab, SerialError) rb2 = from_tokens([TokUnitVariant(vt("VKebab", 1, "KebabTwo"))]);
+    Bool r3 = check_text("renamed variants decode by the new name only", sr(rb) + " " + sr(rb2), "Ok(KebabTwo) Err(unknown variant `KebabTwo`, expected `kebab-variant` or `kebab-two`)");
+    Bool r4 = check("rename beats rename_all; container rename", assert_tokens(RenameBoth {.kept_name = 1, .other = 2}, [TokStruct(st("Renamed", 2)), TokField("KEPT_NAME"), TokInt(1), TokField("custom"), TokInt(2), TokStructEnd]));
+
+    // ── One side only (the missing side is a compile error: see run.sh).
+    Bool o1 = check("encode only", assert_ser_tokens(EncOnly {.a = 1}, [TokStruct(st("EncOnly", 1)), TokField("a"), TokInt(1), TokStructEnd]));
+    Result(DecOnly, SerialError) od = from_tokens([TokStruct(st("DecOnly", 1)), TokField("a"), TokInt(3), TokStructEnd]);
+    Bool o2 = check_text("decode only", sr(od), "Ok(DecOnly { a: 3 })");
+
+    // ── Generics.
+    Holder(Str) h = Holder {.item = "i", .more = ["m"]};
+    Bool g1 = check("parameter named F", assert_tokens(h, [TokStruct(st("Holder", 2)), TokField("item"), TokStr("i"), TokField("more"), TokSeq(1), TokStr("m"), TokSeqEnd, TokStructEnd]));
+    Both(Int, Str) bt = Both {.left = 1, .right = None};
+    Bool g2 = check("two parameters", assert_tokens(bt, [TokStruct(st("Both", 2)), TokField("left"), TokInt(1), TokField("right"), TokNone, TokStructEnd]));
+    Nest ne = Nest {.table = {"k": [Both {.left = 2, .right = Some("r")}]}};
+    Bool g3 = check("nested generic field types", assert_tokens(ne, [TokStruct(st("Nest", 1)), TokField("table"), TokMap(1), TokStr("k"), TokSeq(1),
+        TokStruct(st("Both", 2)), TokField("left"), TokInt(2), TokField("right"), TokSome, TokStr("r"), TokStructEnd, TokSeqEnd, TokMapEnd, TokStructEnd]));
+    Wrap(List(Int)) wr = Wrap {.inner = [1]};
+    Bool g4 = check("generic transparent", assert_tokens(wr, [TokSeq(1), TokInt(1), TokSeqEnd]));
+    Bool g5 = check("empty record", assert_tokens(Nothing0 {}, [TokStruct(st("Nothing0", 0)), TokStructEnd]));
+
+    // ── deny_unknown_fields with an alias.
+    Result(Strict, SerialError) sd1 = from_tokens([TokStruct(st("Strict", 1)), TokField("b"), TokInt(1), TokStructEnd]);
+    Result(Strict, SerialError) sd2 = from_tokens([TokStruct(st("Strict", 1)), TokField("c"), TokInt(1), TokStructEnd]);
+    Bool d1 = check_text("deny_unknown_fields", sr(sd1) + " " + sr(sd2), "Ok(Strict { a: 1 }) Err(unknown field `c`, expected `a` or `b`)");
+
+    // ── flatten.
+    Flat fl = Flat {.id = "f", .pos = Inner1 {.x = 1, .y = 2}, .tag = Inner2 {.label = "L"}, .extra = 0};
+    Value flv = to_value(fl) else { VUnit };
+    Bool l1 = check_text("flatten two fields, skip_encoding_if", f"{flv}", "Flat { id: \"f\", x: 1, y: 2, label: \"L\" }");
+    Result(Flat, SerialError) flb = from_value(vstruct("", [vfield("label", VStr("M")), vfield("y", VInt(4)), vfield("id", VStr("g")), vfield("x", VInt(3)), vfield("extra", VInt(9))]));
+    Bool l2 = check_text("flatten decodes in any order", sr(flb), "Ok(Flat { id: \"g\", pos: Inner1 { x: 3, y: 4 }, tag: Inner2 { label: \"M\" }, extra: 9 })");
+    Result(Flat, SerialError) flc = from_value(vstruct("", [vfield("id", VStr("g")), vfield("x", VInt(3)), vfield("label", VStr("M"))]));
+    Bool l3 = check_text("flatten missing inner field", sr(flc), "Err(missing field `y`)");
+    FlatMap fm = FlatMap {.id = "m", .rest = {"b": 2, "a": 1}};
+    Value fmv = to_value(fm) else { VUnit };
+    Result(FlatMap, SerialError) fmb = from_value(vstruct("", [vfield("id", VStr("n")), vfield("z", VInt(26))]));
+    Bool l4 = check_text("flatten a map", f"{fmv} " + sr(fmb), "FlatMap { id: \"m\", a: 1, b: 2 } Ok(FlatMap { id: \"n\", rest: {\"z\": 26} })");
+    Result(List(Token), SerialError) flt = to_tokens(fl);
+    Bool l5 = check_text("flatten streams through any encoder", sr(flt), "Ok([Struct(Flat, 4), Field(id), Str(\"f\"), Field(x), Int(1), Field(y), Int(2), Field(label), Str(\"L\"), StructEnd])");
+
+    // ── Externally tagged: aliases, skipped variants.
+    Bool x1 = check("external newtype", assert_tokens(Keep(1), [TokVariant(vt("Ext", 0, "Keep")), TokInt(1), TokVariantEnd]));
+    Result(Ext, SerialError) xa = from_tokens([TokUnitVariant(vt("Ext", 2, "Else"))]);
+    Bool x2 = check_text("variant alias", sr(xa), "Ok(Other)");
+    Result(List(Token), SerialError) xs = to_tokens(Hidden(1));
+    Result(Skippy, SerialError) xsd = from_tokens([TokVariant(vt("Skippy", 1, "Hidden")), TokInt(1), TokVariantEnd]);
+    Bool x3 = check_text("skipped variant", sr(xs) + " " + sr(xsd), "Err(variant Hidden is not encodable) Err(unknown variant `Hidden`, expected `Shown` or `Last`)");
+    Bool x4 = check("variants after a skipped one", assert_tokens(Last, [TokUnitVariant(vt("Skippy", 2, "Last"))]) && assert_tokens(Shown(5), [TokVariant(vt("Skippy", 0, "Shown")), TokInt(5), TokVariantEnd]));
+
+    // ── Internally tagged.
+    Bool t1 = check_text("internal unit/struct/map", tv(to_value(UnitCase)) + " " + tv(to_value(StructCase(Inner1 {.x = 1, .y = 2}))) + " " + tv(to_value(MapCase({"k": 3}))),
+        "Ok(Internal { kind: \"unit_case\" }) Ok(Internal { kind: \"struct_case\", x: 1, y: 2 }) Ok(Internal { kind: \"map_case\", k: 3 })");
+    Bool t2 = check_text("internal scalar payload", tv(to_value(Scalar(1))), "Err(invalid type: expected a struct or map to flatten, found an integer at ::scalar)");
+    Result(Internal, SerialError) ti1 = from_value(vstruct("", [vfield("x", VInt(5)), vfield("kind", VStr("struct_case")), vfield("y", VInt(6))]));
+    Result(Internal, SerialError) ti2 = from_value(vstruct("", [vfield("kind", VStr("map_case")), vfield("q", VInt(1))]));
+    Result(Internal, SerialError) ti3 = from_value(vstruct("", [vfield("kind", VStr("unit_case"))]));
+    Bool t3 = check_text("internal decode", sr(ti1) + " " + sr(ti2) + " " + sr(ti3), "Ok(StructCase(Inner1 { x: 5, y: 6 })) Ok(MapCase({\"q\": 1})) Ok(UnitCase)");
+    Result(Internal, SerialError) ti4 = from_value(vstruct("", [vfield("x", VInt(5))]));
+    Result(Internal, SerialError) ti5 = from_value(vstruct("", [vfield("kind", VStr("nope"))]));
+    Result(Internal, SerialError) ti6 = from_value(vstruct("", [vfield("kind", VStr("struct_case")), vfield("x", VInt(5))]));
+    Bool t4 = check_text("internal decode errors", sr(ti4) + " | " + sr(ti5) + " | " + sr(ti6), "Err(missing field `kind`) | Err(unknown variant `nope`, expected `unit_case`, `struct_case`, `map_case` or `scalar`) | Err(missing field `y` at ::struct_case)");
+    Result(List(Token), SerialError) ttk = to_tokens(StructCase(Inner1 {.x = 1, .y = 2}));
+    Bool t5 = check_text("internal through tokens", sr(ttk), "Ok([Struct(Internal, 3), Field(kind), Str(\"struct_case\"), Field(x), Int(1), Field(y), Int(2), StructEnd])");
+    Result(Internal, SerialError) ttd = from_tokens(ttk else { [] });
+    Bool t6 = check_text("internal back from tokens", sr(ttd), "Ok(StructCase(Inner1 { x: 1, y: 2 }))");
+
+    // ── Adjacently tagged.
+    Bool a1 = check("adjacent unit", assert_tokens(AUnit, [TokStruct(st("Adjacent", 1)), TokField("t"), TokStr("AUnit"), TokStructEnd]));
+    Bool a2 = check("adjacent newtype", assert_tokens(AOne(4), [TokStruct(st("Adjacent", 2)), TokField("t"), TokStr("AOne"), TokField("c"), TokInt(4), TokStructEnd]));
+    Result(Adjacent, SerialError) ad1 = from_value(vstruct("", [vfield("c", vstruct("", [vfield("x", VInt(1)), vfield("y", VInt(2))])), vfield("t", VStr("rec"))]));
+    Result(Adjacent, SerialError) ad2 = from_value(vstruct("", [vfield("t", VStr("AOne"))]));
+    Result(Adjacent, SerialError) ad3 = from_value(vstruct("", [vfield("t", VStr("ARec"))]));
+    Bool a3 = check_text("adjacent decode", sr(ad1) + " | " + sr(ad2) + " | " + sr(ad3), "Ok(ARec(Inner1 { x: 1, y: 2 })) | Err(invalid type: expected an integer, found unit at ::AOne) | Err(unknown variant `ARec`, expected `AUnit`, `AOne` or `rec`)");
+
+    // ── Untagged: first variant that fits, unit, no fit.
+    List(Untagged) us = [UInt1(1), UStr("s"), URec(Inner1 {.x = 1, .y = 2}), UNone];
+    Value uv = to_value(us) else { VUnit };
+    Result(List(Untagged), SerialError) ub = from_value(uv);
+    Bool u1 = check_text("untagged round trip", f"{uv} " + sr(ub), "[1, \"s\", Inner1 { x: 1, y: 2 }, ()] Ok([UInt1(1), UStr(\"s\"), URec(Inner1 { x: 1, y: 2 }), UNone])");
+    Result(Untagged, SerialError) ubad = from_value(VSeq([]));
+    Bool u2 = check_text("untagged no fit", sr(ubad), "Err(data did not match any variant of untagged enum Untagged)");
+    Result(List(Token), SerialError) utk = to_tokens(UStr("x"));
+    Bool u3 = check_text("untagged through tokens", sr(utk), "Ok([Str(\"x\")])");
+    Bool u4 = check_text("skipped variant in another representation", tv(to_value(UHidden("h"))), "Err(variant UHidden is not encodable)");
+
+    // ── A generic enum, internally tagged.
+    GenTag(Int) gt = GOne(Holder {.item = 1, .more = [2]});
+    Value gtv = to_value(gt) else { VUnit };
+    Result(GenTag(Int), SerialError) gtb = from_value(gtv);
+    GenTag(Int) gn = GNone;
+    Result(GenTag(Int), SerialError) gnb = from_value(to_value(gn) else { VUnit });
+    Bool u5 = check_text("generic internally tagged", f"{gtv} " + sr(gtb) + " " + sr(gnb), "GenTag { k: \"GOne\", item: 1, more: [2] } Ok(GOne(Holder { item: 1, more: [2] })) Ok(GNone)");
+    return 0;
+}
+
+// The field names in a struct's tokens.
+Str field_names(Result(List(Token), SerialError) r) {
+    List(Token) none = [];
+    List(Token) ts = r else { none };
+    return str_join(field_names_at(ts, 0, []), ",");
+}
+
+List(Str) field_names_at(List(Token) ts, Int i, List(Str) acc) {
+    if (i >= ts.len()) { return acc; }
+    Token t = ts[i];
+    List(Str) acc2 = match t { TokField(k) => acc.concat([k]), _ => acc };
+    return field_names_at(ts, i + 1, acc2);
+}
+
+Str variant_of(Result(List(Token), SerialError) r) {
+    List(Token) none = [];
+    List(Token) ts = r else { none };
+    if (ts.len() == 0) { return "?"; }
+    Token t = ts[0];
+    return match t { TokUnitVariant(v) => v.variant, TokVariant(w) => w.variant, _ => "?" };
+}

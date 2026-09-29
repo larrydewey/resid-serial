@@ -1,0 +1,114 @@
+// Hand-written Encode/Decode instances for a record and a sum type,
+// round-tripped through the Value tree.
+import "../src/serial.resid";
+import "../src/value.resid";
+
+type Point = { Int x; Int y; Str label; Option(Int) z; };
+
+List(Str) point_fields() { return ["x", "y", "label", "z"]; }
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_point(Point p, F s) {
+    F s1 = write_struct_begin(s, "Point", 4)?;
+    F s2 = write_named(s1, "x", p.x)?;
+    F s3 = write_named(s2, "y", p.y)?;
+    F s4 = write_named(s3, "label", p.label)?;
+    F s5 = write_named(s4, "z", p.z)?;
+    return write_struct_end(s5);
+}
+Encode(Point, F) = enc_point;
+
+@needs(Decoder(F))
+Result(Parsed(Point, F), SerialError) dec_point(F s) {
+    F s1 = read_struct_begin(s, "Point", point_fields())?;
+    return dec_point_fields(s1, None, None, None, None);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Point, F), SerialError) dec_point_fields(F s, Option(Int) x, Option(Int) y, Option(Str) label, Option(Option(Int)) z) {
+    Parsed(FieldKey, F) k = read_field(s, point_fields())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => dec_point_field(k.rest, i, x, y, label, z),
+        UnknownField(name) => dec_point_fields(skip_unknown(k.rest, name, point_fields(), false)?, x, y, label, z),
+        EndOfFields => finish_point(k.rest, x, y, label, z)
+    };
+}
+
+@needs(Decoder(F))
+Result(Parsed(Point, F), SerialError) dec_point_field(F s, Int i, Option(Int) x, Option(Int) y, Option(Str) label, Option(Option(Int)) z) {
+    if (i == 0) { Parsed(Option(Int), F) v = read_slot(s, x, "x")?; return dec_point_fields(v.rest, v.value, y, label, z); }
+    if (i == 1) { Parsed(Option(Int), F) v = read_slot(s, y, "y")?; return dec_point_fields(v.rest, x, v.value, label, z); }
+    if (i == 2) { Parsed(Option(Str), F) v = read_slot(s, label, "label")?; return dec_point_fields(v.rest, x, y, v.value, z); }
+    Parsed(Option(Option(Int)), F) v = read_slot(s, z, "z")?;
+    return dec_point_fields(v.rest, x, y, label, v.value);
+}
+
+Result(Parsed(Point, F), SerialError) finish_point(F s, Option(Int) x, Option(Int) y, Option(Str) label, Option(Option(Int)) z) {
+    Int xv = require(x, "x")?;
+    Int yv = require(y, "y")?;
+    Str lv = or_default(label, "");
+    Option(Int) zv = flatten_opt(z);
+    return parsed(Point {.x = xv, .y = yv, .label = lv, .z = zv}, s);
+}
+Decode(Point, F) = dec_point;
+
+type Shape = Circle(Float) | Square(Point) | Empty;
+
+List(Str) shape_variants() { return ["Circle", "Square", "Empty"]; }
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_shape(Shape sh, F s) {
+    return match sh {
+        Circle(r) => write_newtype_variant(s, "Shape", 0, "Circle", r),
+        Square(p) => write_newtype_variant(s, "Shape", 1, "Square", p),
+        Empty => write_unit_variant(s, "Shape", 2, "Empty")
+    };
+}
+Encode(Shape, F) = enc_shape;
+
+@needs(Decoder(F))
+Result(Parsed(Shape, F), SerialError) dec_shape(F s) {
+    Parsed(Int, F) v = read_variant(s, "Shape", shape_variants())?;
+    if (v.value == 0) {
+        Parsed(Float, F) r = read_newtype_payload(v.rest, "Circle")?;
+        return parsed(Circle(r.value), r.rest);
+    }
+    if (v.value == 1) {
+        Parsed(Point, F) p = read_newtype_payload(v.rest, "Square")?;
+        return parsed(Square(p.value), p.rest);
+    }
+    return read_unit_payload(v.rest, Empty);
+}
+Decode(Shape, F) = dec_shape;
+
+Int main() {
+    Point p = Point {.x = 1, .y = -2, .label = "origin", .z = Some(5)};
+    Value pv = to_value(p) else { VUnit };
+    println(f"{pv}");
+    Result(Point, SerialError) back = from_value(pv);
+    println(f"{back}");
+
+    List(Shape) shapes = [Circle(1.5), Square(p), Empty];
+    Value sv = to_value(shapes) else { VUnit };
+    println(f"{sv}");
+    Result(List(Shape), SerialError) sback = from_value(sv);
+    println(f"{sback}");
+
+    // Missing field, wrong type deep inside, unknown variant.
+    Value partial = vstruct("Point", [vfield("y", VInt(3))]);
+    Result(Point, SerialError) e1 = from_value(partial);
+    println(f"{e1}");
+    Value bad = VSeq([VVariant(VPayload {.tag = vtag("Shape", 1, "Square"), .payload = vstruct("Point", [vfield("x", VStr("one")), vfield("y", VInt(0))])})]);
+    Result(List(Shape), SerialError) e2 = from_value(bad);
+    println(f"{e2}");
+    Result(Shape, SerialError) e3 = from_value(VStr("Hexagon"));
+    println(f"{e3}");
+    // A string-keyed map decodes as a struct; absent label takes its default.
+    Value m = VMap([ventry(VStr("x"), VInt(7)), ventry(VStr("y"), VUInt(u64(8))), ventry(VStr("extra"), VBool(true))]);
+    Result(Point, SerialError) fm = from_value(m);
+    println(f"{fm}");
+    Int gx = get_field(m, "x") else { -1 };
+    println(f"{gx}");
+    return 0;
+}

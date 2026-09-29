@@ -1,0 +1,95 @@
+ok   bool true
+ok   bool false
+ok   bool from Int
+ok   int
+ok   int min
+ok   int max
+ok   int from Str
+ok   u64 max
+ok   u64 zero
+ok   u64 from Int
+ok   i32 bounds
+ok   i32 over
+ok   i32 under
+ok   i16 bounds
+ok   i16 over
+ok   i16 under
+ok   i8 bounds
+ok   i8 over
+ok   i8 under
+ok   u32 bounds
+ok   u32 over
+ok   u16 bounds
+ok   u16 over
+ok   u8 bounds
+ok   u8 over
+ok   narrow wrong type
+ok   i128 min/max
+ok   u128 max
+ok   i128 wrong type
+ok   float
+ok   f32
+ok   f16
+ok   float wrong type
+ok   dec
+ok   dec decode
+ok   dec decode integer text
+ok   dec rounds to N digits
+ok   dec bad text
+ok   is_decimal_text
+ok   str
+ok   str unicode
+ok   Str(N)
+ok   Str(N) fits
+ok   Str(N) too long
+ok   Str(N) multibyte too long
+ok   Str(N) streams multibyte
+ok   Str(N) wrong type
+ok   utf8_len
+ok   Bytes(N)
+ok   Bytes(N) short input pads
+ok   Bytes(N) too long
+ok   Bytes(N) not a byte
+ok   Bytes(N) wrong type
+ok   bytes
+ok   empty bytes
+ok   bytes wrong type
+ok   unit
+ok   unit wrong type
+ok   none
+ok   some
+ok   some(none)
+ok   option wrong type
+ok   some missing payload
+ok   list
+ok   empty list
+ok   nested list
+ok   list element path
+ok   nested list path
+ok   list unterminated
+ok   list wrong type
+ok   List(T, N)
+ok   List(T, N) short
+ok   List(T, N) long
+ok   List(Str, N)
+ok   set
+ok   set dedupes
+ok   set of str
+ok   map
+ok   empty map
+ok   map int keys
+ok   map duplicate key
+ok   map value path
+ok   map key error
+ok   map wrong type
+ok   ok
+ok   err
+ok   result unknown variant
+ok   result unit variant
+ok   result payload path
+ok   result missing end
+ok   deep composition
+ok   map of list of result
+ok   trailing input
+ok   empty input
+exit 0

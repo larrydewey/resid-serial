@@ -1,0 +1,3 @@
+Config { HOST_NAME: "db", PORT: 5432, LEVEL: Some(Level::warn-and-up) }
+Ok(Config { host_name: "db", port: 5432, level: Some(WarnAndUp) })
+exit 0

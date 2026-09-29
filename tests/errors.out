@@ -1,0 +1,33 @@
+ok   serial_error
+ok   custom_error
+ok   eof_error
+ok   syntax_error
+ok   invalid_type
+ok   invalid_value
+ok   invalid_length
+ok   unknown_field
+ok   missing_field
+ok   duplicate_field
+ok   unknown_variant
+ok   unsupported
+ok   trailing_input
+ok   one_of 0
+ok   one_of 1
+ok   one_of 3
+ok   one_of 4
+ok   error kinds
+ok   error_path
+ok   error_text with path
+ok   error_path top level
+ok   at_field
+ok   at_index
+ok   at_key
+ok   at_variant
+ok   at_seg
+ok   at_* pass Ok through
+ok   at_* nest outermost first
+ok   path keeps kind
+ok   Show(SerialError)
+ok   Show(ErrorKind)
+ok   Show(Peek)
+exit 0

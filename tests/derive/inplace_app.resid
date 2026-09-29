@@ -1,0 +1,86 @@
+// resid-derive --inplace: types, generated instances and main in one file.
+import "../../src/serial.resid";
+import "../../src/value.resid";
+
+//@ serial(rename_all = "SCREAMING_SNAKE_CASE")
+type Config = { Str host_name; Int port; Option(Level) level; };
+
+//@ serial(rename_all = "kebab-case")
+type Level = Debug | InfoOnly | WarnAndUp;
+
+Int main() {
+    Config c = Config {.host_name = "db", .port = 5432, .level = Some(WarnAndUp)};
+    Value v = to_value(c) else { VUnit };
+    println(f"{v}");
+    Result(Config, SerialError) back = from_value(v);
+    println(f"{back}");
+    return 0;
+}
+
+// ==== resid-derive: begin generated code (do not edit) ====
+// From the //@ serial annotations above; rerun resid-derive --inplace to update.
+
+// ── Config (line 6)
+pub List(Str) derive_config_names() { return ["HOST_NAME", "PORT", "LEVEL"]; }
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_config_encode(Config v, F s) {
+    Int n = 3;
+    F s0 = write_struct_begin(s, "Config", n)?;
+    F s1 = write_named(s0, "HOST_NAME", v.host_name)?;
+    F s2 = write_named(s1, "PORT", v.port)?;
+    F s3 = write_named(s2, "LEVEL", v.level)?;
+    return write_struct_end(s3);
+}
+Encode(Config, F) = derive_config_encode;
+@needs(Decoder(F))
+pub Result(Parsed(Config, F), SerialError) derive_config_decode(F s) {
+    F s0 = read_struct_begin(s, "Config", derive_config_names())?;
+    return derive_config_fields(s0, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(Config, F), SerialError) derive_config_fields(F s, Option(Str) f_host_name, Option(Int) f_port, Option(Option(Level)) f_level) {
+    Parsed(FieldKey, F) k = read_field(s, derive_config_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_config_field(k.rest, i, f_host_name, f_port, f_level),
+        UnknownField(name) => derive_config_fields(skip_unknown(k.rest, name, derive_config_names(), false)?, f_host_name, f_port, f_level),
+        EndOfFields => derive_config_done(k.rest, f_host_name, f_port, f_level)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(Config, F), SerialError) derive_config_field(F s, Int i, Option(Str) f_host_name, Option(Int) f_port, Option(Option(Level)) f_level) {
+    if (i == 0) { Parsed(Option(Str), F) p = read_slot(s, f_host_name, "HOST_NAME")?; return derive_config_fields(p.rest, p.value, f_port, f_level); }
+    if (i == 1) { Parsed(Option(Int), F) p = read_slot(s, f_port, "PORT")?; return derive_config_fields(p.rest, f_host_name, p.value, f_level); }
+    Parsed(Option(Option(Level)), F) p = read_slot(s, f_level, "LEVEL")?; return derive_config_fields(p.rest, f_host_name, f_port, p.value);
+}
+Result(Parsed(Config, F), SerialError) derive_config_done(F s, Option(Str) f_host_name, Option(Int) f_port, Option(Option(Level)) f_level) {
+    Str d_host_name = require(f_host_name, "HOST_NAME")?;
+    Int d_port = require(f_port, "PORT")?;
+    Option(Level) d_level_absent = None;
+    Option(Level) d_level = or_default(f_level, d_level_absent);
+    return parsed(Config {.host_name = d_host_name, .port = d_port, .level = d_level}, s);
+}
+Decode(Config, F) = derive_config_decode;
+
+// ── Level (line 9)
+pub List(Str) derive_level_variants() { return ["debug", "info-only", "warn-and-up"]; }
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_level_encode(Level v, F s) {
+    return match v {
+        Debug => write_unit_variant(s, "Level", 0, "debug"),
+        InfoOnly => write_unit_variant(s, "Level", 1, "info-only"),
+        WarnAndUp => write_unit_variant(s, "Level", 2, "warn-and-up")
+    };
+}
+Encode(Level, F) = derive_level_encode;
+@needs(Decoder(F))
+pub Result(Parsed(Level, F), SerialError) derive_level_decode(F s) {
+    Parsed(Int, F) t = read_variant(s, "Level", derive_level_variants())?;
+    Int i = t.value;
+    if (i == 0) { Level u0 = Debug; return read_unit_payload(t.rest, u0); }
+    if (i == 1) { Level u1 = InfoOnly; return read_unit_payload(t.rest, u1); }
+    if (i == 2) { Level u2 = WarnAndUp; return read_unit_payload(t.rest, u2); }
+    return Err(custom_error(f"variant index {i} out of range"));
+}
+Decode(Level, F) = derive_level_decode;
+// ==== resid-derive: end generated code ====

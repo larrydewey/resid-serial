@@ -1,0 +1,1148 @@
+// resid-derive — generate Encode/Decode instances (serial.resid) for the
+// annotated types of a Resid file: the stand-in for #[derive(Serialize,
+// Deserialize)].
+//
+// Mark a type with a `//@ serial` comment on the line(s) before it; mark
+// fields and variants with `//@ ...` comments before them or trailing on
+// their line:
+//
+//     //@ serial(rename_all = "camelCase", deny_unknown_fields)
+//     type User = {
+//         Str user_name;                 //@ rename = "login"
+//         Int age;                       //@ default
+//         Option(Str) email;             //@ skip_encoding_if = "is_none_str"
+//         Str secret;                    //@ skip, default = "no_secret"
+//     };
+//
+// Usage:
+//     resid-derive [--lib DIR] [--inplace] [-o OUT] FILE.resid
+//
+//   (default)   write FILE_serial.resid next to FILE, importing FILE and
+//               DIR/serial.resid (DIR/value.resid when needed). The types'
+//               file must not import the generated one (that is a cycle):
+//               keep types in their own module, or use --inplace.
+//   --inplace   put the generated code into FILE itself, between marker
+//               comments (replaced on each run); FILE must import
+//               serial.resid (and value.resid when needed) itself.
+//
+// Container options (in `serial(...)`):
+//   encode | decode             derive only one side (default: both)
+//   rename = "Name"             the name formats see
+//   rename_all = "rule"         lowercase, UPPERCASE, PascalCase, camelCase,
+//                               snake_case, SCREAMING_SNAKE_CASE, kebab-case,
+//                               SCREAMING-KEBAB-CASE
+//   deny_unknown_fields         unknown struct fields are errors
+//   transparent                 a one-field record encodes as its field
+//   tag = "t"                   enum: internally tagged {t: "Variant", ...}
+//   tag = "t", content = "c"    enum: adjacently tagged {t: .., c: payload}
+//   untagged                    enum: the payload alone; decoding tries each
+// Field options:
+//   rename = "n", alias = "n"   the name written / another name accepted
+//   default, default = "fn"     when absent: the type's zero value / fn()
+//   skip                        neither written nor read (needs a default)
+//   skip_encoding, skip_decoding
+//   skip_encoding_if = "fn"     not written when fn(value) is true
+//   flatten                     inline the field's own fields
+// Variant options: rename = "n", alias = "n", skip.
+//
+// flatten, tag and untagged decode through a Value, so they need a
+// self-describing format, as in serde.
+
+// ─── Lexer ──────────────────────────────────────────────────────────
+
+// kind: 0 identifier, 1 number, 2 punctuation, 3 `//@` annotation, 4 string
+type Tok = { Int kind; Str text; Int line; };
+
+Bool is_alpha(Int c) { return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95; }
+Bool is_digit(Int c) { return c >= 48 && c <= 57; }
+Bool is_alnum(Int c) { return is_alpha(c) || is_digit(c); }
+Bool is_upper(Int c) { return c >= 65 && c <= 90; }
+
+List(Tok) lex(Str src) {
+    List(Tok) none = [];
+    return lex_at(src, 0, 1, none);
+}
+
+List(Tok) lex_at(Str src, Int i, Int line, List(Tok) acc) {
+    Int n = str_len(src);
+    if (i >= n) { return acc; }
+    Int c = str_char_at(src, i);
+    if (c == 10) { return lex_at(src, i + 1, line + 1, acc); }
+    if (c == 32 || c == 9 || c == 13) { return lex_at(src, i + 1, line, acc); }
+    Int c2 = if (i + 1 < n) { str_char_at(src, i + 1) } else { 0 };
+    if (c == 47 && c2 == 47) {
+        Int e = line_end(src, i);
+        Bool annot = i + 2 < n && str_char_at(src, i + 2) == 64;
+        if (annot) { return lex_at(src, e, line, acc.concat([Tok {.kind = 3, .text = str_trim(str_slice(src, i + 3, e)), .line = line}])); }
+        return lex_at(src, e, line, acc);
+    }
+    if (c == 47 && c2 == 42) {
+        Int e2 = block_end(src, i + 2);
+        return lex_at(src, e2, line + str_count(str_slice(src, i, e2), "\n"), acc);
+    }
+    if (c == 34 || c == 39) {
+        Int e3 = quote_end(src, i + 1, c);
+        Str body = str_slice(src, i, e3);
+        return lex_at(src, e3, line + str_count(body, "\n"), acc.concat([Tok {.kind = 4, .text = body, .line = line}]));
+    }
+    if (is_alpha(c)) {
+        Int e4 = word_end(src, i);
+        return lex_at(src, e4, line, acc.concat([Tok {.kind = 0, .text = str_slice(src, i, e4), .line = line}]));
+    }
+    if (is_digit(c)) {
+        Int e5 = number_end(src, i);
+        return lex_at(src, e5, line, acc.concat([Tok {.kind = 1, .text = str_slice(src, i, e5), .line = line}]));
+    }
+    return lex_at(src, i + 1, line, acc.concat([Tok {.kind = 2, .text = str_from_code(c), .line = line}]));
+}
+
+Int line_end(Str src, Int i) {
+    if (i >= str_len(src) || str_char_at(src, i) == 10) { return i; }
+    return line_end(src, i + 1);
+}
+
+Int block_end(Str src, Int i) {
+    if (i + 1 >= str_len(src)) { return str_len(src); }
+    if (str_char_at(src, i) == 42 && str_char_at(src, i + 1) == 47) { return i + 2; }
+    return block_end(src, i + 1);
+}
+
+Int quote_end(Str src, Int i, Int q) {
+    if (i >= str_len(src)) { return i; }
+    Int c = str_char_at(src, i);
+    if (c == 92) { return quote_end(src, i + 2, q); }
+    if (c == q) { return i + 1; }
+    return quote_end(src, i + 1, q);
+}
+
+Int word_end(Str src, Int i) {
+    if (i >= str_len(src) || !is_alnum(str_char_at(src, i))) { return i; }
+    return word_end(src, i + 1);
+}
+
+Int number_end(Str src, Int i) {
+    if (i >= str_len(src)) { return i; }
+    Int c = str_char_at(src, i);
+    if (!is_alnum(c) && c != 46) { return i; }
+    return number_end(src, i + 1);
+}
+
+// ─── Annotations ────────────────────────────────────────────────────
+
+// `key` or `key = "value"`; a wrapper `serial(...)` becomes the key
+// `serial` followed by its items.
+type Attr = { Str key; Str val; };
+
+List(Attr) parse_attrs(Str text) {
+    List(Attr) none = [];
+    return attrs_at(text, 0, none);
+}
+
+List(Attr) attrs_at(Str t, Int i, List(Attr) acc) {
+    Int n = str_len(t);
+    if (i >= n) { return acc; }
+    Int c = str_char_at(t, i);
+    if (c == 32 || c == 44 || c == 40 || c == 41 || c == 9) { return attrs_at(t, i + 1, acc); }
+    Int ke = key_end(t, i);
+    if (ke == i) { return attrs_at(t, i + 1, acc); }
+    Str key = str_slice(t, i, ke);
+    Int j = skip_spaces(t, ke);
+    if (j < n && str_char_at(t, j) == 61) {
+        Int vs = skip_spaces(t, j + 1);
+        if (vs < n && str_char_at(t, vs) == 34) {
+            Int ve = quote_end(t, vs + 1, 34);
+            return attrs_at(t, ve, acc.concat([Attr {.key = key, .val = str_slice(t, vs + 1, ve - 1)}]));
+        }
+        Int we = key_end(t, vs);
+        return attrs_at(t, we, acc.concat([Attr {.key = key, .val = str_slice(t, vs, we)}]));
+    }
+    return attrs_at(t, j, acc.concat([Attr {.key = key, .val = ""}]));
+}
+
+Int key_end(Str t, Int i) {
+    if (i >= str_len(t)) { return i; }
+    Int c = str_char_at(t, i);
+    if (is_alnum(c) || c == 45) { return key_end(t, i + 1); }
+    return i;
+}
+
+Int skip_spaces(Str t, Int i) {
+    if (i < str_len(t) && str_char_at(t, i) == 32) { return skip_spaces(t, i + 1); }
+    return i;
+}
+
+Bool has_attr(List(Attr) as, Str key) { return attr_index(as, key, 0) >= 0; }
+
+Int attr_index(List(Attr) as, Str key, Int i) {
+    if (i >= as.len()) { return -1; }
+    if (as[i].key == key) { return i; }
+    return attr_index(as, key, i + 1);
+}
+
+Str attr_val(List(Attr) as, Str key) {
+    Int i = attr_index(as, key, 0);
+    return if (i >= 0) { as[i].val } else { "" };
+}
+
+// Every value of a repeatable key (alias).
+List(Str) attr_vals(List(Attr) as, Str key, Int i, List(Str) acc) {
+    if (i >= as.len()) { return acc; }
+    return attr_vals(as, key, i + 1, if (as[i].key == key) { acc.concat([as[i].val]) } else { acc });
+}
+
+// ─── Declarations ───────────────────────────────────────────────────
+
+type Field = { Str ty; Str name; List(Attr) attrs; Int line; };
+type Variant = { Str name; Str payload; List(Attr) attrs; Int line; };
+type Decl = { Str name; List(Str) params; Bool record; List(Field) fields; List(Variant) variants; List(Attr) attrs; Int line; };
+
+type TyP = { Str text; Int next; };
+
+// A type expression starting at token i: `Name`, `Name(arg, ...)`, or a
+// closure type (text contains "closure", which generation rejects).
+TyP parse_ty(List(Tok) ts, Int i) {
+    Str head = ts[i].text;
+    Int j = i + 1;
+    if (j < ts.len() && ts[j].text == "(") {
+        TyP args = parse_ty_args(ts, j + 1, "");
+        TyP whole = TyP {.text = head + "(" + args.text + ")", .next = args.next};
+        return closure_tail(ts, whole);
+    }
+    return closure_tail(ts, TyP {.text = head, .next = j});
+}
+
+// `R closure(P, ...)`: keep the text so the error can name it.
+TyP closure_tail(List(Tok) ts, TyP t) {
+    if (t.next < ts.len() && ts[t.next].text == "closure") {
+        TyP inner = parse_ty(ts, t.next);
+        return TyP {.text = t.text + " " + inner.text, .next = inner.next};
+    }
+    return t;
+}
+
+TyP parse_ty_args(List(Tok) ts, Int i, Str acc) {
+    if (i >= ts.len()) { return TyP {.text = acc, .next = i}; }
+    if (ts[i].text == ")") { return TyP {.text = acc, .next = i + 1}; }
+    if (ts[i].text == ",") { return parse_ty_args(ts, i + 1, acc + ", "); }
+    TyP a = parse_ty(ts, i);
+    return parse_ty_args(ts, a.next, acc + a.text);
+}
+
+type DeclP = { Decl decl; Int next; Str err; };
+
+// `type Name[(P, ...)] = { ... };` or `= A | B(T) | ...;` from the token
+// after `type`.
+DeclP parse_decl(List(Tok) ts, Int i, List(Attr) attrs) {
+    Str name = ts[i].text;
+    List(Str) none = [];
+    Int j = i + 1;
+    ParamsP ps = if (j < ts.len() && ts[j].text == "(") { parse_params(ts, j + 1, none) } else { ParamsP {.params = none, .next = j} };
+    Int eq = ps.next;
+    List(Field) nf = [];
+    List(Variant) nv = [];
+    Decl base = Decl {.name = name, .params = ps.params, .record = false, .fields = nf, .variants = nv, .attrs = attrs, .line = ts[i].line};
+    if (eq >= ts.len() || ts[eq].text != "=") { return DeclP {.decl = base, .next = eq, .err = "expected = after type " + name}; }
+    if (eq + 1 < ts.len() && ts[eq + 1].text == "{") {
+        List(Attr) pend = [];
+        return parse_fields(ts, eq + 2, base, nf, pend, -1);
+    }
+    List(Attr) pend2 = [];
+    return parse_variants(ts, eq + 1, base, nv, pend2, -1);
+}
+
+type ParamsP = { List(Str) params; Int next; };
+
+ParamsP parse_params(List(Tok) ts, Int i, List(Str) acc) {
+    if (i >= ts.len()) { return ParamsP {.params = acc, .next = i}; }
+    if (ts[i].text == ")") { return ParamsP {.params = acc, .next = i + 1}; }
+    if (ts[i].text == ",") { return parse_params(ts, i + 1, acc); }
+    return parse_params(ts, i + 1, acc.concat([ts[i].text]));
+}
+
+// Fields until `}`. An annotation on the line of the last field belongs to
+// it; others wait for the next field.
+DeclP parse_fields(List(Tok) ts, Int i, Decl d, List(Field) acc, List(Attr) pend, Int last_line) {
+    if (i >= ts.len()) { return DeclP {.decl = d, .next = i, .err = "unterminated record " + d.name + f" (line {d.line})"}; }
+    Tok t = ts[i];
+    if (t.kind == 3) {
+        List(Attr) as = parse_attrs(t.text);
+        if (t.line == last_line && acc.len() > 0) { return parse_fields(ts, i + 1, d, add_field_attrs(acc, as), pend, last_line); }
+        return parse_fields(ts, i + 1, d, acc, pend.concat(as), last_line);
+    }
+    if (t.text == "}") {
+        Int after = if (i + 1 < ts.len() && ts[i + 1].text == ";") { i + 2 } else { i + 1 };
+        Decl done = Decl {.name = d.name, .params = d.params, .record = true, .fields = acc, .variants = d.variants, .attrs = d.attrs, .line = d.line};
+        return trailing_decl_attrs(ts, after, done, ts[i].line);
+    }
+    TyP ty = parse_ty(ts, i);
+    if (ty.next + 1 >= ts.len()) { return DeclP {.decl = d, .next = ty.next, .err = "unterminated field in " + d.name + f" (line {d.line})"}; }
+    Tok fname = ts[ty.next];
+    Int semi = ty.next + 1;
+    if (ts[semi].text != ";") { return DeclP {.decl = d, .next = semi, .err = f"expected ; after field {fname.text} of " + d.name + f" (line {fname.line})"}; }
+    Field f = Field {.ty = ty.text, .name = fname.text, .attrs = pend, .line = fname.line};
+    List(Attr) none = [];
+    return parse_fields(ts, semi + 1, d, acc.concat([f]), none, ts[semi].line);
+}
+
+List(Field) add_field_attrs(List(Field) fs, List(Attr) as) {
+    Int n = fs.len();
+    Field f = fs[n - 1];
+    Field g = Field {.ty = f.ty, .name = f.name, .attrs = f.attrs.concat(as), .line = f.line};
+    return fs[0..n - 1].concat([g]);
+}
+
+// Variants separated by `|` until `;`.
+DeclP parse_variants(List(Tok) ts, Int i, Decl d, List(Variant) acc, List(Attr) pend, Int last_line) {
+    if (i >= ts.len()) { return DeclP {.decl = d, .next = i, .err = "unterminated sum type " + d.name + f" (line {d.line})"}; }
+    Tok t = ts[i];
+    if (t.kind == 3) {
+        List(Attr) as = parse_attrs(t.text);
+        if (t.line == last_line && acc.len() > 0) { return parse_variants(ts, i + 1, d, add_variant_attrs(acc, as), pend, last_line); }
+        return parse_variants(ts, i + 1, d, acc, pend.concat(as), last_line);
+    }
+    if (t.text == "|") { return parse_variants(ts, i + 1, d, acc, pend, last_line); }
+    if (t.text == ";") {
+        Decl done = Decl {.name = d.name, .params = d.params, .record = false, .fields = d.fields, .variants = acc, .attrs = d.attrs, .line = d.line};
+        return trailing_decl_attrs(ts, i + 1, done, t.line);
+    }
+    List(Attr) none = [];
+    if (i + 1 < ts.len() && ts[i + 1].text == "(") {
+        TyP p = parse_ty(ts, i + 2);
+        Int close = p.next;
+        Variant v = Variant {.name = t.text, .payload = p.text, .attrs = pend, .line = t.line};
+        return parse_variants(ts, close + 1, d, acc.concat([v]), none, t.line);
+    }
+    Variant u = Variant {.name = t.text, .payload = "", .attrs = pend, .line = t.line};
+    return parse_variants(ts, i + 1, d, acc.concat([u]), none, t.line);
+}
+
+List(Variant) add_variant_attrs(List(Variant) vs, List(Attr) as) {
+    Int n = vs.len();
+    Variant v = vs[n - 1];
+    Variant w = Variant {.name = v.name, .payload = v.payload, .attrs = v.attrs.concat(as), .line = v.line};
+    return vs[0..n - 1].concat([w]);
+}
+
+// An annotation trailing the declaration's last line belongs to its last
+// field or variant.
+DeclP trailing_decl_attrs(List(Tok) ts, Int i, Decl d, Int line) {
+    if (i < ts.len() && ts[i].kind == 3 && ts[i].line == line) {
+        List(Attr) as = parse_attrs(ts[i].text);
+        if (d.record && d.fields.len() > 0) {
+            Decl d2 = Decl {.name = d.name, .params = d.params, .record = true, .fields = add_field_attrs(d.fields, as), .variants = d.variants, .attrs = d.attrs, .line = d.line};
+            return DeclP {.decl = d2, .next = i + 1, .err = ""};
+        }
+        if (!d.record && d.variants.len() > 0) {
+            Decl d3 = Decl {.name = d.name, .params = d.params, .record = false, .fields = d.fields, .variants = add_variant_attrs(d.variants, as), .attrs = d.attrs, .line = d.line};
+            return DeclP {.decl = d3, .next = i + 1, .err = ""};
+        }
+    }
+    return DeclP {.decl = d, .next = i, .err = ""};
+}
+
+type Scan = { List(Decl) decls; Str err; };
+
+// Top-level walk: `type` declarations preceded by a `//@ serial` annotation.
+Scan scan(List(Tok) ts, Int i, Int depth, List(Attr) pend, List(Decl) acc) {
+    if (i >= ts.len()) { return Scan {.decls = acc, .err = ""}; }
+    Tok t = ts[i];
+    List(Attr) none = [];
+    if (depth == 0 && t.kind == 3) { return scan(ts, i + 1, depth, pend.concat(parse_attrs(t.text)), acc); }
+    if (depth == 0 && t.kind == 0 && t.text == "pub") { return scan(ts, i + 1, depth, pend, acc); }
+    if (depth == 0 && t.kind == 0 && t.text == "type" && i + 1 < ts.len()) {
+        DeclP d = parse_decl(ts, i + 1, pend);
+        if (d.err != "") {
+            if (has_attr(pend, "serial")) { return Scan {.decls = acc, .err = d.err}; }
+            return scan(ts, d.next, depth, none, acc);
+        }
+        return scan(ts, d.next, depth, none, if (has_attr(pend, "serial")) { acc.concat([d.decl]) } else { acc });
+    }
+    Int nd = if (t.text == "{") { depth + 1 } else { if (t.text == "}") { depth - 1 } else { depth } };
+    return scan(ts, i + 1, nd, none, acc);
+}
+
+// ─── Names ──────────────────────────────────────────────────────────
+
+// PascalCase -> snake_case.
+Str snake(Str name) { return snake_at(name, 0, ""); }
+
+Str snake_at(Str s, Int i, Str acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Str piece = if (is_upper(c)) { if (i == 0) { str_to_lower(str_from_code(c)) } else { "_" + str_to_lower(str_from_code(c)) } } else { str_from_code(c) };
+    return snake_at(s, i + 1, acc + piece);
+}
+
+Str capitalize(Str w) {
+    if (str_len(w) == 0) { return w; }
+    return str_to_upper(str_slice(w, 0, 1)) + str_slice(w, 1, str_len(w));
+}
+
+Str decapitalize(Str w) {
+    if (str_len(w) == 0) { return w; }
+    return str_to_lower(str_slice(w, 0, 1)) + str_slice(w, 1, str_len(w));
+}
+
+Str pascal_words(List(Str) ws, Int i, Str acc) {
+    if (i >= ws.len()) { return acc; }
+    return pascal_words(ws, i + 1, acc + capitalize(ws[i]));
+}
+
+// serde's RenameRule, applied to a (snake_case) field name.
+Str rename_field(Str rule, Str n) {
+    if (rule == "UPPERCASE" || rule == "SCREAMING_SNAKE_CASE") { return str_to_upper(n); }
+    if (rule == "PascalCase") { return pascal_words(str_split(n, "_"), 0, ""); }
+    if (rule == "camelCase") { return decapitalize(pascal_words(str_split(n, "_"), 0, "")); }
+    if (rule == "kebab-case") { return str_replace(n, "_", "-"); }
+    if (rule == "SCREAMING-KEBAB-CASE") { return str_to_upper(str_replace(n, "_", "-")); }
+    return n;
+}
+
+// ... and to a (PascalCase) variant name.
+Str rename_variant(Str rule, Str n) {
+    if (rule == "lowercase") { return str_to_lower(n); }
+    if (rule == "UPPERCASE") { return str_to_upper(n); }
+    if (rule == "camelCase") { return decapitalize(n); }
+    if (rule == "snake_case") { return snake(n); }
+    if (rule == "SCREAMING_SNAKE_CASE") { return str_to_upper(snake(n)); }
+    if (rule == "kebab-case") { return str_replace(snake(n), "_", "-"); }
+    if (rule == "SCREAMING-KEBAB-CASE") { return str_to_upper(str_replace(snake(n), "_", "-")); }
+    return n;
+}
+
+Bool known_rule(Str r) {
+    return r == "" || r == "lowercase" || r == "UPPERCASE" || r == "PascalCase" || r == "camelCase" || r == "snake_case"
+        || r == "SCREAMING_SNAKE_CASE" || r == "kebab-case" || r == "SCREAMING-KEBAB-CASE";
+}
+
+Str quoted(Str s) { return "\"" + str_replace(s, "\"", "\\\"") + "\""; }
+
+Str quoted_list(List(Str) xs) { return "[" + quoted_list_at(xs, 0, "") + "]"; }
+
+Str quoted_list_at(List(Str) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    Str sep = if (i == 0) { "" } else { ", " };
+    return quoted_list_at(xs, i + 1, acc + sep + quoted(xs[i]));
+}
+
+// The type as written in code: `Point` or `Pair(T)`.
+Str self_ty(Decl d) {
+    if (d.params.len() == 0) { return d.name; }
+    return d.name + "(" + str_join(d.params, ", ") + ")";
+}
+
+// A format type parameter that is not one of the declaration's own.
+Str fmt_var(Decl d) { return fmt_var_at(d, ["F", "G", "H", "W", "Z"], 0); }
+
+Str fmt_var_at(Decl d, List(Str) cs, Int i) {
+    if (i >= cs.len() - 1 || !d.params.contains(cs[i])) { return cs[i]; }
+    return fmt_var_at(d, cs, i + 1);
+}
+
+Str needs_list(List(Str) ps, Str b, Str fv, Int i, Str acc) {
+    if (i >= ps.len()) { return acc; }
+    return needs_list(ps, b, fv, i + 1, acc + ", " + b + "(" + ps[i] + ", " + fv + ")");
+}
+
+// ─── Field plans ────────────────────────────────────────────────────
+
+// What generation needs per field: its written name, the names accepted
+// on decode (written name first, then aliases), and its options.
+type Plan = { Field f; Str key; List(Str) names; Bool enc; Bool dec; Str skip_if; Str dflt; Bool has_default; Bool flatten; };
+
+Plan plan_field(Field f, Str rule) {
+    List(Attr) as = f.attrs;
+    Str renamed = attr_val(as, "rename");
+    Str key = if (renamed != "") { renamed } else { rename_field(rule, f.name) };
+    List(Str) none = [];
+    List(Str) first = [key];
+    Bool skip = has_attr(as, "skip");
+    Str dfn = attr_val(as, "default");
+    return Plan {
+        .f = f, .key = key, .names = first.concat(attr_vals(as, "alias", 0, none)),
+        .enc = !skip && !has_attr(as, "skip_encoding"), .dec = !skip && !has_attr(as, "skip_decoding"),
+        .skip_if = attr_val(as, "skip_encoding_if"), .dflt = dfn, .has_default = has_attr(as, "default"),
+        .flatten = has_attr(as, "flatten")
+    };
+}
+
+List(Plan) plans(List(Field) fs, Str rule, Int i, List(Plan) acc) {
+    if (i >= fs.len()) { return acc; }
+    return plans(fs, rule, i + 1, acc.concat([plan_field(fs[i], rule)]));
+}
+
+// A zero value for `default` without a function, when the type has one.
+Str zero_value(Str ty) {
+    if (ty == "Int" || ty == "UInt" || str_starts_with(ty, "Int(") || str_starts_with(ty, "UInt(")) { return "0"; }
+    if (ty == "Float" || str_starts_with(ty, "Float(")) { return "0.0"; }
+    if (ty == "Str" || str_starts_with(ty, "Str(")) { return "\"\""; }
+    if (str_starts_with(ty, "Bytes(")) { return "b\"\""; }
+    if (ty == "Bool") { return "false"; }
+    if (str_starts_with(ty, "Option(")) { return "None"; }
+    if (str_starts_with(ty, "List(")) { return "[]"; }
+    if (str_starts_with(ty, "Map(") || str_starts_with(ty, "Set(")) { return "{}"; }
+    return "";
+}
+
+Bool is_option(Str ty) { return str_starts_with(ty, "Option("); }
+
+// The expression a field takes when it is not in the input ("" = required).
+Str absent_value(Plan p) {
+    if (p.dflt != "") { return p.dflt + "()"; }
+    if (p.has_default || !p.dec || is_option(p.f.ty)) { return zero_value(p.f.ty); }
+    return "";
+}
+
+Str check_plans(Decl d, List(Plan) ps, Int i) {
+    if (i >= ps.len()) { return ""; }
+    Plan p = ps[i];
+    Str where = d.name + "." + p.f.name + f" (line {p.f.line})";
+    if (str_contains(p.f.ty, "closure") && (p.enc || p.dec)) { return where + ": a closure field cannot be encoded; mark it `skip, default = \"fn\"`"; }
+    Str bad = unknown_attr(p.f.attrs, field_keys(), 0);
+    if (bad != "") { return where + ": unknown field option `" + bad + "` (known: " + str_join(field_keys(), ", ") + ")"; }
+    Bool needs_value = !p.dec || p.has_default;
+    if (needs_value && absent_value(p) == "") { return where + ": " + p.f.ty + " has no zero value; give `default = \"fn\"`"; }
+    return check_plans(d, ps, i + 1);
+}
+
+Bool any_flatten(List(Plan) ps, Int i) {
+    if (i >= ps.len()) { return false; }
+    return ps[i].flatten || any_flatten(ps, i + 1);
+}
+
+// ─── Validation ─────────────────────────────────────────────────────
+
+List(Str) container_keys() { return ["serial", "encode", "decode", "rename", "rename_all", "deny_unknown_fields", "transparent", "tag", "content", "untagged"]; }
+List(Str) field_keys() { return ["rename", "alias", "default", "skip", "skip_encoding", "skip_decoding", "skip_encoding_if", "flatten"]; }
+List(Str) variant_keys() { return ["rename", "alias", "skip"]; }
+
+// The first option not in `known`, or "".
+Str unknown_attr(List(Attr) as, List(Str) known, Int i) {
+    if (i >= as.len()) { return ""; }
+    if (!known.contains(as[i].key)) { return as[i].key; }
+    return unknown_attr(as, known, i + 1);
+}
+
+// Options that cannot go together, or on this kind of type.
+Str bad_combination(Decl d) {
+    List(Attr) as = d.attrs;
+    Bool tag = has_attr(as, "tag");
+    if (d.record && (tag || has_attr(as, "content") || has_attr(as, "untagged"))) { return "tag, content and untagged apply to sum types"; }
+    if (!d.record && (has_attr(as, "transparent") || has_attr(as, "deny_unknown_fields"))) { return "transparent and deny_unknown_fields apply to records"; }
+    if (has_attr(as, "content") && !tag) { return "content needs tag"; }
+    if (tag && attr_val(as, "tag") == "") { return "tag needs a name: tag = \"t\""; }
+    if (tag && has_attr(as, "untagged")) { return "untagged cannot have a tag"; }
+    if (has_attr(as, "deny_unknown_fields") && fields_flatten(d.fields, 0)) { return "deny_unknown_fields cannot be combined with flatten"; }
+    return "";
+}
+
+Bool fields_flatten(List(Field) fs, Int i) {
+    if (i >= fs.len()) { return false; }
+    return has_attr(fs[i].attrs, "flatten") || fields_flatten(fs, i + 1);
+}
+
+// ─── Output ─────────────────────────────────────────────────────────
+
+type Out = { List(Str) lines; Str err; Bool value; };
+
+Out emit(Out o, Str line) { return Out {.lines = o.lines.concat([line]), .err = o.err, .value = o.value}; }
+
+Out emit_all(Out o, List(Str) ls) { return Out {.lines = o.lines.concat(ls), .err = o.err, .value = o.value}; }
+
+Out fail(Out o, Str err) { return Out {.lines = o.lines, .err = if (o.err == "") { err } else { o.err }, .value = o.value}; }
+
+Out uses_value(Out o) { return Out {.lines = o.lines, .err = o.err, .value = true}; }
+
+Out gen_decls(List(Decl) ds, Int i, Out o) {
+    if (i >= ds.len() || o.err != "") { return o; }
+    return gen_decls(ds, i + 1, gen_decl(ds[i], o));
+}
+
+Out gen_decl(Decl d, Out o) {
+    List(Attr) as = d.attrs;
+    Str rule = attr_val(as, "rename_all");
+    Str where = d.name + f" (line {d.line})";
+    if (!known_rule(rule)) { return fail(o, where + ": unknown rename_all rule \"" + rule + "\""); }
+    Str bad = unknown_attr(as, container_keys(), 0);
+    if (bad != "") { return fail(o, where + ": unknown option `" + bad + "` (known: " + str_join(container_keys(), ", ") + ")"); }
+    Str combo = bad_combination(d);
+    if (combo != "") { return fail(o, where + ": " + combo); }
+    Bool only_enc = has_attr(as, "encode") && !has_attr(as, "decode");
+    Bool only_dec = has_attr(as, "decode") && !has_attr(as, "encode");
+    Out o1 = emit(o, "// ── " + self_ty(d) + f" (line {d.line})");
+    if (d.record) { return gen_record(d, rule, !only_dec, !only_enc, o1); }
+    return gen_sum(d, rule, !only_dec, !only_enc, o1);
+}
+
+Str prefix(Decl d) { return "derive_" + snake(d.name); }
+
+Str wire_name(Decl d) {
+    Str r = attr_val(d.attrs, "rename");
+    return if (r != "") { r } else { d.name };
+}
+
+// ── Records
+
+Out gen_record(Decl d, Str rule, Bool enc, Bool dec, Out o) {
+    List(Plan) none = [];
+    List(Plan) ps = plans(d.fields, rule, 0, none);
+    Str bad = check_plans(d, ps, 0);
+    if (bad != "") { return fail(o, bad); }
+    if (has_attr(d.attrs, "transparent")) { return gen_transparent(d, ps, enc, dec, o); }
+    Bool flat = any_flatten(ps, 0);
+    Out o1 = emit(o, "pub List(Str) " + prefix(d) + "_names() { return " + quoted_list(decode_names(ps, 0, [])) + "; }");
+    Out o2 = if (enc) { if (flat) { gen_record_enc_value(d, ps, o1) } else { gen_record_enc(d, ps, o1) } } else { o1 };
+    Out o3 = if (dec) { if (flat) { gen_record_dec_value(d, ps, o2) } else { gen_record_dec(d, ps, o2) } } else { o2 };
+    return emit(o3, "");
+}
+
+// Names read_field matches: every decoded field's names, in field order,
+// aliases after the written name.
+List(Str) decode_names(List(Plan) ps, Int i, List(Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    return decode_names(ps, i + 1, if (ps[i].dec && !ps[i].flatten) { acc.concat(ps[i].names) } else { acc });
+}
+
+Out gen_record_enc(Decl d, List(Plan) ps, Out o) {
+    Str fv = fmt_var(d);
+    Str needs = "@needs(Encoder(" + fv + ")" + needs_list(d.params, "Encode", fv, 0, "") + ")";
+    Out o1 = emit_all(o, [
+        needs,
+        "pub Result(" + fv + ", SerialError) " + prefix(d) + "_encode(" + self_ty(d) + " v, " + fv + " s) {",
+        "    Int n = " + enc_count(ps, 0, 0, "") + ";",
+        "    " + fv + " s0 = write_struct_begin(s, " + quoted(wire_name(d)) + ", n)?;"
+    ]);
+    Out o2 = gen_enc_fields(ps, fv, 0, 0, o1);
+    Int last = enc_steps(ps, 0, 0);
+    return emit_all(o2, [f"    return write_struct_end(s{last});", "}", "Encode(" + self_ty(d) + ", " + fv + ") = " + prefix(d) + "_encode;"]);
+}
+
+// The announced length: fields always written, plus each conditional one.
+Str enc_count(List(Plan) ps, Int i, Int fixed, Str cond) {
+    if (i >= ps.len()) { return f"{fixed}" + cond; }
+    Plan p = ps[i];
+    if (!p.enc) { return enc_count(ps, i + 1, fixed, cond); }
+    if (p.skip_if != "") { return enc_count(ps, i + 1, fixed, cond + " + (if (" + p.skip_if + "(v." + p.f.name + ")) { 0 } else { 1 })"); }
+    return enc_count(ps, i + 1, fixed + 1, cond);
+}
+
+Int enc_steps(List(Plan) ps, Int i, Int n) {
+    if (i >= ps.len()) { return n; }
+    return enc_steps(ps, i + 1, if (ps[i].enc) { n + 1 } else { n });
+}
+
+Out gen_enc_fields(List(Plan) ps, Str fv, Int i, Int step, Out o) {
+    if (i >= ps.len()) { return o; }
+    Plan p = ps[i];
+    if (!p.enc) { return gen_enc_fields(ps, fv, i + 1, step, o); }
+    Str call = if (p.skip_if != "") {
+        f"write_named_if(s{step}, !" + p.skip_if + "(v." + p.f.name + "), " + quoted(p.key) + ", v." + p.f.name + ")"
+    } else {
+        f"write_named(s{step}, " + quoted(p.key) + ", v." + p.f.name + ")"
+    };
+    Out o1 = emit(o, "    " + fv + f" s{step + 1} = " + call + "?;");
+    return gen_enc_fields(ps, fv, i + 1, step + 1, o1);
+}
+
+// Decoding: slots for the decoded fields threaded through a field loop.
+List(Plan) dec_plans(List(Plan) ps, Int i, List(Plan) acc) {
+    if (i >= ps.len()) { return acc; }
+    return dec_plans(ps, i + 1, if (ps[i].dec && !ps[i].flatten) { acc.concat([ps[i]]) } else { acc });
+}
+
+Str slot_ty(Plan p) { return "Option(" + p.f.ty + ")"; }
+
+Str slot_params(List(Plan) ds, Int i, Str acc) {
+    if (i >= ds.len()) { return acc; }
+    return slot_params(ds, i + 1, acc + ", " + slot_ty(ds[i]) + " f_" + ds[i].f.name);
+}
+
+Str slot_args(List(Plan) ds, Int i, Str acc) {
+    if (i >= ds.len()) { return acc; }
+    return slot_args(ds, i + 1, acc + ", f_" + ds[i].f.name);
+}
+
+// slot_args with slot j replaced by `repl`.
+Str slot_args_with(List(Plan) ds, Int i, Int j, Str repl, Str acc) {
+    if (i >= ds.len()) { return acc; }
+    Str a = if (i == j) { repl } else { "f_" + ds[i].f.name };
+    return slot_args_with(ds, i + 1, j, repl, acc + ", " + a);
+}
+
+Str nones(Int n, Int i, Str acc) {
+    if (i >= n) { return acc; }
+    return nones(n, i + 1, acc + ", None");
+}
+
+Out gen_record_dec(Decl d, List(Plan) ps, Out o) {
+    Str fv = fmt_var(d);
+    Str needs = "@needs(Decoder(" + fv + ")" + needs_list(d.params, "Decode", fv, 0, "") + ")";
+    Str res = "Result(Parsed(" + self_ty(d) + ", " + fv + "), SerialError)";
+    List(Plan) none = [];
+    List(Plan) ds = dec_plans(ps, 0, none);
+    Str pre = prefix(d);
+    Str deny = if (has_attr(d.attrs, "deny_unknown_fields")) { "true" } else { "false" };
+    Out o1 = emit_all(o, [
+        needs,
+        "pub " + res + " " + pre + "_decode(" + fv + " s) {",
+        "    " + fv + " s0 = read_struct_begin(s, " + quoted(wire_name(d)) + ", " + pre + "_names())?;",
+        "    return " + pre + "_fields(s0" + nones(ds.len(), 0, "") + ");",
+        "}",
+        needs,
+        res + " " + pre + "_fields(" + fv + " s" + slot_params(ds, 0, "") + ") {",
+        "    Parsed(FieldKey, " + fv + ") k = read_field(s, " + pre + "_names())?;",
+        "    FieldKey key = k.value;",
+        "    return match key {",
+        if (ds.len() == 0) { "        KnownField(i) => Err(custom_error(\"no fields to match\"))," } else { "        KnownField(i) => " + pre + "_field(k.rest, i" + slot_args(ds, 0, "") + ")," },
+        "        UnknownField(name) => " + pre + "_fields(skip_unknown(k.rest, name, " + pre + "_names(), " + deny + ")?" + slot_args(ds, 0, "") + "),",
+        "        EndOfFields => " + pre + "_done(k.rest" + slot_args(ds, 0, "") + ")",
+        "    };",
+        "}"
+    ]);
+    Out o2 = if (ds.len() == 0) { o1 } else { gen_field_fn(d, ds, fv, needs, res, o1) };
+    Out o3 = gen_done_fn(d, ps, ds, fv, res, o2);
+    return emit(o3, "Decode(" + self_ty(d) + ", " + fv + ") = " + pre + "_decode;");
+}
+
+Out gen_field_fn(Decl d, List(Plan) ds, Str fv, Str needs, Str res, Out o) {
+    Str pre = prefix(d);
+    Out o1 = emit_all(o, [needs, res + " " + pre + "_field(" + fv + " s, Int i" + slot_params(ds, 0, "") + ") {"]);
+    Out o2 = gen_field_cases(d, ds, fv, 0, 0, o1);
+    return emit(o2, "}");
+}
+
+// One case per decoded field, matching its index range in the names list.
+Out gen_field_cases(Decl d, List(Plan) ds, Str fv, Int j, Int at, Out o) {
+    if (j >= ds.len()) { return o; }
+    Plan p = ds[j];
+    Str pre = prefix(d);
+    Int n = p.names.len();
+    Str cond = if (n == 1) { f"i == {at}" } else { f"i >= {at} && i < {at + n}" };
+    Str body = "Parsed(" + slot_ty(p) + ", " + fv + ") p = read_slot(s, f_" + p.f.name + ", " + quoted(p.key) + ")?; return " + pre + "_fields(p.rest" + slot_args_with(ds, 0, j, "p.value", "") + ");";
+    Bool last = j == ds.len() - 1;
+    Str line = if (last) { "    " + body } else { "    if (" + cond + ") { " + body + " }" };
+    return gen_field_cases(d, ds, fv, j + 1, at + n, emit(o, line));
+}
+
+Out gen_done_fn(Decl d, List(Plan) ps, List(Plan) ds, Str fv, Str res, Out o) {
+    Out o1 = emit(o, res + " " + prefix(d) + "_done(" + fv + " s" + slot_params(ds, 0, "") + ") {");
+    Out o2 = gen_done_fields(ps, 0, o1);
+    return emit_all(o2, ["    return parsed(" + record_lit(d, ps) + ", s);", "}"]);
+}
+
+// Each field's final value: from its slot, else its default, else an error.
+Out gen_done_fields(List(Plan) ps, Int i, Out o) {
+    if (i >= ps.len()) { return o; }
+    Plan p = ps[i];
+    Str ty = p.f.ty;
+    Str d = "d_" + p.f.name;
+    Str absent = absent_value(p);
+    List(Str) ls = if (!p.dec) {
+        ["    " + ty + " " + d + " = " + absent + ";"]
+    } else {
+        if (absent == "") {
+            ["    " + ty + " " + d + " = require(f_" + p.f.name + ", " + quoted(p.key) + ")?;"]
+        } else {
+            ["    " + ty + " " + d + "_absent = " + absent + ";", "    " + ty + " " + d + " = or_default(f_" + p.f.name + ", " + d + "_absent);"]
+        }
+    };
+    return gen_done_fields(ps, i + 1, emit_all(o, ls));
+}
+
+Str record_lit(Decl d, List(Plan) ps) { return d.name + " {" + record_inits(ps, 0, "") + "}"; }
+
+Str record_inits(List(Plan) ps, Int i, Str acc) {
+    if (i >= ps.len()) { return acc; }
+    Str sep = if (i == 0) { "" } else { ", " };
+    return record_inits(ps, i + 1, acc + sep + "." + ps[i].f.name + " = d_" + ps[i].f.name);
+}
+
+// A record with a flattened field goes through a Value on both sides.
+Out gen_record_enc_value(Decl d, List(Plan) ps, Out o) {
+    Str fv = fmt_var(d);
+    Str needs = "@needs(Encoder(" + fv + ")" + needs_list(d.params, "Encode", "VEnc", 0, "") + ")";
+    Out o1 = emit_all(uses_value(o), [
+        needs,
+        "pub Result(" + fv + ", SerialError) " + prefix(d) + "_encode(" + self_ty(d) + " v, " + fv + " s) {",
+        "    List(VField) fs0 = [];"
+    ]);
+    Out o2 = gen_value_fields(ps, 0, 0, o1);
+    Int last = enc_steps(ps, 0, 0);
+    return emit_all(o2, [
+        "    Value whole = vstruct(" + quoted(wire_name(d)) + f", fs{last});",
+        "    return encode(whole, s);",
+        "}",
+        "Encode(" + self_ty(d) + ", " + fv + ") = " + prefix(d) + "_encode;"
+    ]);
+}
+
+Out gen_value_fields(List(Plan) ps, Int i, Int step, Out o) {
+    if (i >= ps.len()) { return o; }
+    Plan p = ps[i];
+    if (!p.enc) { return gen_value_fields(ps, i + 1, step, o); }
+    Str val = "to_value(v." + p.f.name + ")?";
+    Str add = if (p.flatten) { "flatten_fields(" + val + ")?" } else { "[vfield(" + quoted(p.key) + ", " + val + ")]" };
+    Str line = if (p.skip_if != "") {
+        f"    List(VField) fs{step + 1} = if (" + p.skip_if + "(v." + p.f.name + ")) { " + f"fs{step}" + " } else { " + f"fs{step}.concat(" + add + ") };"
+    } else {
+        f"    List(VField) fs{step + 1} = fs{step}.concat(" + add + ");"
+    };
+    return gen_value_fields(ps, i + 1, step + 1, emit(o, line));
+}
+
+Out gen_record_dec_value(Decl d, List(Plan) ps, Out o) {
+    Str fv = fmt_var(d);
+    Str needs = "@needs(Decoder(" + fv + ")" + needs_list(d.params, "Decode", "VDec", 0, "") + ")";
+    Str res = "Result(Parsed(" + self_ty(d) + ", " + fv + "), SerialError)";
+    Out o1 = emit_all(uses_value(o), [
+        needs,
+        "pub " + res + " " + prefix(d) + "_decode(" + fv + " s) {",
+        "    Parsed(Value, " + fv + ") pv = decode(s)?;",
+        "    Value v = pv.value;"
+    ]);
+    Out o2 = gen_value_gets(d, ps, 0, o1);
+    return emit_all(o2, ["    return parsed(" + record_lit(d, ps) + ", pv.rest);", "}", "Decode(" + self_ty(d) + ", " + fv + ") = " + prefix(d) + "_decode;"]);
+}
+
+Out gen_value_gets(Decl d, List(Plan) ps, Int i, Out o) {
+    if (i >= ps.len()) { return o; }
+    Plan p = ps[i];
+    Str ty = p.f.ty;
+    Str dn = "d_" + p.f.name;
+    Str absent = absent_value(p);
+    List(Str) ls = if (!p.dec) {
+        ["    " + ty + " " + dn + " = " + absent + ";"]
+    } else {
+        if (p.flatten) {
+            ["    " + ty + " " + dn + " = from_value(without_fields(v, " + prefix(d) + "_names()))?;"]
+        } else {
+            if (absent == "") {
+                ["    " + ty + " " + dn + " = get_field_in(v, " + quoted_list(p.names) + ")?;"]
+            } else {
+                ["    " + ty + " " + dn + "_absent = " + absent + ";", "    " + ty + " " + dn + " = get_field_in_or(v, " + quoted_list(p.names) + ", " + dn + "_absent)?;"]
+            }
+        }
+    };
+    return gen_value_gets(d, ps, i + 1, emit_all(o, ls));
+}
+
+// `transparent`: the record is its one encoded field.
+Out gen_transparent(Decl d, List(Plan) ps, Bool enc, Bool dec, Out o) {
+    if (ps.len() != 1) { return fail(o, d.name + f" (line {d.line}): transparent needs exactly one field"); }
+    Plan p = ps[0];
+    Str fv = fmt_var(d);
+    Str pre = prefix(d);
+    List(Str) e = [
+        "@needs(Encoder(" + fv + ")" + needs_list(d.params, "Encode", fv, 0, "") + ")",
+        "pub Result(" + fv + ", SerialError) " + pre + "_encode(" + self_ty(d) + " v, " + fv + " s) { return encode(v." + p.f.name + ", s); }",
+        "Encode(" + self_ty(d) + ", " + fv + ") = " + pre + "_encode;"
+    ];
+    List(Str) dl = [
+        "@needs(Decoder(" + fv + ")" + needs_list(d.params, "Decode", fv, 0, "") + ")",
+        "pub Result(Parsed(" + self_ty(d) + ", " + fv + "), SerialError) " + pre + "_decode(" + fv + " s) {",
+        "    Parsed(" + p.f.ty + ", " + fv + ") p = decode(s)?;",
+        "    return parsed(" + d.name + " {." + p.f.name + " = p.value}, p.rest);",
+        "}",
+        "Decode(" + self_ty(d) + ", " + fv + ") = " + pre + "_decode;"
+    ];
+    List(Str) none = [];
+    return emit(emit_all(emit_all(o, if (enc) { e } else { none }), if (dec) { dl } else { none }), "");
+}
+
+// ── Sum types
+
+type VPlan = { Variant v; Int index; Str key; List(Str) names; Bool skip; };
+
+List(VPlan) vplans(List(Variant) vs, Str rule, Int i, List(VPlan) acc) {
+    if (i >= vs.len()) { return acc; }
+    Variant v = vs[i];
+    Str renamed = attr_val(v.attrs, "rename");
+    Str key = if (renamed != "") { renamed } else { rename_variant(rule, v.name) };
+    List(Str) none = [];
+    List(Str) first = [key];
+    VPlan p = VPlan {.v = v, .index = i, .key = key, .names = first.concat(attr_vals(v.attrs, "alias", 0, none)), .skip = has_attr(v.attrs, "skip")};
+    return vplans(vs, rule, i + 1, acc.concat([p]));
+}
+
+List(Str) variant_names(List(VPlan) ps, Int i, List(Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    return variant_names(ps, i + 1, if (ps[i].skip) { acc } else { acc.concat(ps[i].names) });
+}
+
+// "internal", "adjacent", "untagged" or "external".
+Str repr(Decl d) {
+    if (has_attr(d.attrs, "untagged")) { return "untagged"; }
+    if (attr_val(d.attrs, "tag") != "") { return if (attr_val(d.attrs, "content") != "") { "adjacent" } else { "internal" }; }
+    return "external";
+}
+
+Out gen_sum(Decl d, Str rule, Bool enc, Bool dec, Out o) {
+    List(VPlan) none = [];
+    List(VPlan) ps = vplans(d.variants, rule, 0, none);
+    Str bad = check_variants(d, ps, 0);
+    if (bad != "") { return fail(o, bad); }
+    Str r = repr(d);
+    Out o1 = emit(o, "pub List(Str) " + prefix(d) + "_variants() { return " + quoted_list(variant_names(ps, 0, [])) + "; }");
+    Out o2 = if (enc) { gen_sum_enc(d, ps, r, o1) } else { o1 };
+    Out o3 = if (dec) { if (r == "external") { gen_sum_dec(d, ps, o2) } else { gen_sum_dec_value(d, ps, r, o2) } } else { o2 };
+    return emit(o3, "");
+}
+
+Str check_variants(Decl d, List(VPlan) ps, Int i) {
+    if (i >= ps.len()) { return ""; }
+    Str where = d.name + "::" + ps[i].v.name + f" (line {ps[i].v.line})";
+    if (str_contains(ps[i].v.payload, "closure") && !ps[i].skip) { return where + ": a closure payload cannot be encoded; mark it `skip`"; }
+    Str bad = unknown_attr(ps[i].v.attrs, variant_keys(), 0);
+    if (bad != "") { return where + ": unknown variant option `" + bad + "` (known: " + str_join(variant_keys(), ", ") + ")"; }
+    return check_variants(d, ps, i + 1);
+}
+
+Out gen_sum_enc(Decl d, List(VPlan) ps, Str r, Out o) {
+    Str fv = fmt_var(d);
+    Bool via = r == "internal";
+    Str needs = "@needs(Encoder(" + fv + ")" + needs_list(d.params, "Encode", fv, 0, "") + (if (via) { needs_list(d.params, "Encode", "VEnc", 0, "") } else { "" }) + ")";
+    Out o1 = emit_all(if (via) { uses_value(o) } else { o }, [
+        needs,
+        "pub Result(" + fv + ", SerialError) " + prefix(d) + "_encode(" + self_ty(d) + " v, " + fv + " s) {",
+        "    return match v {"
+    ]);
+    Out o2 = gen_sum_enc_arms(d, ps, r, 0, o1);
+    return emit_all(o2, ["    };", "}", "Encode(" + self_ty(d) + ", " + fv + ") = " + prefix(d) + "_encode;"]);
+}
+
+Out gen_sum_enc_arms(Decl d, List(VPlan) ps, Str r, Int i, Out o) {
+    if (i >= ps.len()) { return o; }
+    VPlan p = ps[i];
+    Bool unit = p.v.payload == "";
+    Str pat = if (unit) { p.v.name } else { p.v.name + "(x)" };
+    Str en = quoted(wire_name(d));
+    Str vk = quoted(p.key);
+    Str tag = quoted(attr_val(d.attrs, "tag"));
+    Str content = quoted(attr_val(d.attrs, "content"));
+    Str body = if (p.skip) {
+        "Err(custom_error(" + quoted("variant " + p.v.name + " is not encodable") + "))"
+    } else {
+        if (r == "external") {
+            if (unit) { "write_unit_variant(s, " + en + f", {p.index}, " + vk + ")" } else { "write_newtype_variant(s, " + en + f", {p.index}, " + vk + ", x)" }
+        } else {
+            if (r == "internal") {
+                if (unit) { "write_internally_tagged(s, " + en + ", " + tag + ", " + vk + ", VUnit)" } else { "write_internally_tagged(s, " + en + ", " + tag + ", " + vk + ", to_value(x)?)" }
+            } else {
+                if (r == "adjacent") {
+                    if (unit) { "write_adjacent_unit(s, " + en + ", " + tag + ", " + vk + ")" } else { "write_adjacent(s, " + en + ", " + tag + ", " + content + ", " + vk + ", x)" }
+                } else {
+                    if (unit) { "write_unit(s)" } else { "encode(x, s)" }
+                }
+            }
+        }
+    };
+    Str sep = if (i == ps.len() - 1) { "" } else { "," };
+    return gen_sum_enc_arms(d, ps, r, i + 1, emit(o, "        " + pat + " => " + body + sep));
+}
+
+// Externally tagged: streamed.
+Out gen_sum_dec(Decl d, List(VPlan) ps, Out o) {
+    Str fv = fmt_var(d);
+    Str pre = prefix(d);
+    Str needs = "@needs(Decoder(" + fv + ")" + needs_list(d.params, "Decode", fv, 0, "") + ")";
+    Out o1 = emit_all(o, [
+        needs,
+        "pub Result(Parsed(" + self_ty(d) + ", " + fv + "), SerialError) " + pre + "_decode(" + fv + " s) {",
+        "    Parsed(Int, " + fv + ") t = read_variant(s, " + quoted(wire_name(d)) + ", " + pre + "_variants())?;",
+        "    Int i = t.value;"
+    ]);
+    Out o2 = gen_sum_dec_cases(d, ps, fv, 0, 0, o1);
+    return emit_all(o2, [
+        "    return Err(custom_error(f\"variant index {i} out of range\"));",
+        "}",
+        "Decode(" + self_ty(d) + ", " + fv + ") = " + pre + "_decode;"
+    ]);
+}
+
+Out gen_sum_dec_cases(Decl d, List(VPlan) ps, Str fv, Int j, Int at, Out o) {
+    if (j >= ps.len()) { return o; }
+    VPlan p = ps[j];
+    if (p.skip) { return gen_sum_dec_cases(d, ps, fv, j + 1, at, o); }
+    Int n = p.names.len();
+    Str cond = if (n == 1) { f"i == {at}" } else { f"i >= {at} && i < {at + n}" };
+    Str st = self_ty(d);
+    Str body = if (p.v.payload == "") {
+        st + f" u{j} = " + p.v.name + "; return read_unit_payload(t.rest, " + f"u{j});"
+    } else {
+        "Parsed(" + p.v.payload + ", " + fv + f") p{j} = read_newtype_payload(t.rest, " + quoted(p.key) + f")?; " + st + f" u{j} = " + p.v.name + f"(p{j}.value); return parsed(u{j}, p{j}.rest);"
+    };
+    return gen_sum_dec_cases(d, ps, fv, j + 1, at + n, emit(o, "    if (" + cond + ") { " + body + " }"));
+}
+
+// Internally / adjacently tagged and untagged: through a Value.
+Out gen_sum_dec_value(Decl d, List(VPlan) ps, Str r, Out o) {
+    Str fv = fmt_var(d);
+    Str pre = prefix(d);
+    Str needs = "@needs(Decoder(" + fv + ")" + needs_list(d.params, "Decode", "VDec", 0, "") + ")";
+    Str tag = quoted(attr_val(d.attrs, "tag"));
+    Str content = quoted(attr_val(d.attrs, "content"));
+    List(Str) head = [
+        needs,
+        "pub Result(Parsed(" + self_ty(d) + ", " + fv + "), SerialError) " + pre + "_decode(" + fv + " s) {",
+        "    Parsed(Value, " + fv + ") pv = decode(s)?;",
+        "    Value v = pv.value;"
+    ];
+    List(Str) split = if (r == "untagged") { [] } else {
+        [
+            if (r == "internal") { "    TagSplit ts = split_internal_tag(v, " + tag + ")?;" } else { "    TagSplit ts = split_adjacent_tag(v, " + tag + ", " + content + ")?;" },
+            "    Int i = name_index(" + pre + "_variants(), ts.variant);"
+        ]
+    };
+    Out o1 = emit_all(emit_all(uses_value(o), head), split);
+    Out o2 = if (r == "untagged") { gen_untagged_cases(d, ps, 0, o1) } else { gen_tagged_cases(d, ps, 0, 0, o1) };
+    Str tail = if (r == "untagged") {
+        "    return Err(custom_error(" + quoted("data did not match any variant of untagged enum " + wire_name(d)) + "));"
+    } else {
+        "    return Err(unknown_variant(ts.variant, " + pre + "_variants()));"
+    };
+    return emit_all(o2, [tail, "}", "Decode(" + self_ty(d) + ", " + fv + ") = " + pre + "_decode;"]);
+}
+
+Out gen_tagged_cases(Decl d, List(VPlan) ps, Int j, Int at, Out o) {
+    if (j >= ps.len()) { return o; }
+    VPlan p = ps[j];
+    if (p.skip) { return gen_tagged_cases(d, ps, j + 1, at, o); }
+    Int n = p.names.len();
+    Str cond = if (n == 1) { f"i == {at}" } else { f"i >= {at} && i < {at + n}" };
+    Str st = self_ty(d);
+    Str body = if (p.v.payload == "") {
+        st + f" u{j} = " + p.v.name + f"; return parsed(u{j}, pv.rest);"
+    } else {
+        "Result(" + p.v.payload + f", SerialError) r{j} = from_value(ts.rest); " + p.v.payload + f" x{j} = at_variant(r{j}, " + quoted(p.key) + f")?; " + st + f" u{j} = " + p.v.name + f"(x{j}); return parsed(u{j}, pv.rest);"
+    };
+    return gen_tagged_cases(d, ps, j + 1, at + n, emit(o, "    if (" + cond + ") { " + body + " }"));
+}
+
+Out gen_untagged_cases(Decl d, List(VPlan) ps, Int j, Out o) {
+    if (j >= ps.len()) { return o; }
+    VPlan p = ps[j];
+    if (p.skip) { return gen_untagged_cases(d, ps, j + 1, o); }
+    Str st = self_ty(d);
+    List(Str) ls = if (p.v.payload == "") {
+        ["    if (is_unit_value(v)) { " + st + f" u{j} = " + p.v.name + f"; return parsed(u{j}, pv.rest); }"]
+    } else {
+        [
+            "    Result(" + p.v.payload + f", SerialError) r{j} = from_value(v);",
+            f"    if (Ok(x{j}) = r{j})" + " { " + st + f" u{j} = " + p.v.name + f"(x{j}); return parsed(u{j}, pv.rest);" + " }"
+        ]
+    };
+    return gen_untagged_cases(d, ps, j + 1, emit_all(o, ls));
+}
+
+// ─── Driver ─────────────────────────────────────────────────────────
+
+Str begin_marker() { return "// ==== resid-derive: begin generated code (do not edit) ===="; }
+Str end_marker() { return "// ==== resid-derive: end generated code ===="; }
+
+Str basename(Str path) {
+    List(Str) parts = str_split(path, "/");
+    return parts[parts.len() - 1];
+}
+
+Str dirname(Str path) {
+    Int i = last_slash(path, str_len(path) - 1);
+    return if (i < 0) { "" } else { str_slice(path, 0, i + 1) };
+}
+
+Int last_slash(Str s, Int i) {
+    if (i < 0) { return -1; }
+    if (str_char_at(s, i) == 47) { return i; }
+    return last_slash(s, i - 1);
+}
+
+Str stem(Str path) {
+    Str b = basename(path);
+    return if (str_ends_with(b, ".resid")) { str_slice(b, 0, str_len(b) - 6) } else { b };
+}
+
+Str lib_path(Str lib, Str file) {
+    if (lib == "") { return file; }
+    return if (str_ends_with(lib, "/")) { lib + file } else { lib + "/" + file };
+}
+
+// Everything but a previous generated region.
+Str strip_generated(Str src) {
+    Int b = str_index_of(src, begin_marker(), 0);
+    if (b < 0) { return src; }
+    Int e = str_index_of(src, end_marker(), b);
+    if (e < 0) { return src; }
+    Int after = e + str_len(end_marker());
+    Int after2 = if (after < str_len(src) && str_char_at(src, after) == 10) { after + 1 } else { after };
+    return str_slice(src, 0, b) + str_slice(src, after2, str_len(src));
+}
+
+type Opts = { Str input; Str output; Str lib; Bool inplace; Str err; };
+
+@requires(args)
+Opts parse_opts(Int i, Opts o) {
+    if (i >= args.count()) { return o; }
+    Str a = args.get(i);
+    if (a == "--inplace") { return parse_opts(i + 1, Opts {.input = o.input, .output = o.output, .lib = o.lib, .inplace = true, .err = o.err}); }
+    if (a == "--lib") { return parse_opts(i + 2, Opts {.input = o.input, .output = o.output, .lib = args.get(i + 1), .inplace = o.inplace, .err = o.err}); }
+    if (a == "-o") { return parse_opts(i + 2, Opts {.input = o.input, .output = args.get(i + 1), .lib = o.lib, .inplace = o.inplace, .err = o.err}); }
+    if (str_starts_with(a, "-")) { return Opts {.input = o.input, .output = o.output, .lib = o.lib, .inplace = o.inplace, .err = "unknown option " + a}; }
+    return parse_opts(i + 1, Opts {.input = a, .output = o.output, .lib = o.lib, .inplace = o.inplace, .err = o.err});
+}
+
+Str usage() { return "usage: resid-derive [--lib DIR] [--inplace] [-o OUT] FILE.resid"; }
+
+// The generated text for `src` (the part the tool owns), or an error.
+type Gen = { Str text; Str err; Int count; };
+
+Gen generate(Str src, Str input, Opts o) {
+    Scan sc = scan(lex(strip_generated(src)), 0, 0, [], []);
+    if (sc.err != "") { return Gen {.text = "", .err = sc.err, .count = 0}; }
+    Out none = Out {.lines = [], .err = "", .value = false};
+    Out out = gen_decls(sc.decls, 0, none);
+    if (out.err != "") { return Gen {.text = "", .err = out.err, .count = 0}; }
+    Str body = str_join(out.lines, "\n");
+    if (o.inplace) {
+        return Gen {.text = begin_marker() + "\n// From the //@ serial annotations above; rerun resid-derive --inplace to update.\n\n" + body + end_marker() + "\n", .err = "", .count = sc.decls.len()};
+    }
+    List(Str) imports = [
+        "// Generated by resid-derive from " + basename(input) + ". Do not edit; rerun resid-derive to update.",
+        "import " + quoted(basename(input)) + ";",
+        "import " + quoted(lib_path(o.lib, "serial.resid")) + ";"
+    ];
+    List(Str) vimport = if (out.value) { ["import " + quoted(lib_path(o.lib, "value.resid")) + ";"] } else { [] };
+    Str head = str_join(imports.concat(vimport), "\n");
+    return Gen {.text = head + "\n\n" + body, .err = "", .count = sc.decls.len()};
+}
+
+@requires(args, filesystem)
+Int main() {
+    List(Str) none = [];
+    Opts o = parse_opts(1, Opts {.input = "", .output = "", .lib = "", .inplace = false, .err = ""});
+    if (o.err != "" || o.input == "") {
+        eprintln(if (o.err != "") { o.err + "\n" + usage() } else { usage() });
+        return 2;
+    }
+    if (!filesystem.exists(o.input)) {
+        eprintln("resid-derive: cannot read " + o.input);
+        return 1;
+    }
+    Str src = filesystem.read_all(o.input);
+    Gen g = generate(src, o.input, o);
+    if (g.err != "") {
+        eprintln("resid-derive: " + o.input + ": " + g.err);
+        return 1;
+    }
+    if (o.inplace) {
+        Str kept = strip_generated(src);
+        Str sep = if (str_ends_with(kept, "\n\n") || kept == "") { "" } else { if (str_ends_with(kept, "\n")) { "\n" } else { "\n\n" } };
+        Bool ok = filesystem.write_all(o.input, kept + sep + g.text);
+        if (!ok) { eprintln("resid-derive: cannot write " + o.input); return 1; }
+        println(f"resid-derive: {g.count} type(s) -> " + o.input + " (in place)");
+        return 0;
+    }
+    Str out = if (o.output != "") { o.output } else { dirname(o.input) + stem(o.input) + "_serial.resid" };
+    Bool ok2 = filesystem.write_all(out, g.text);
+    if (!ok2) { eprintln("resid-derive: cannot write " + out); return 1; }
+    println(f"resid-derive: {g.count} type(s) -> " + out);
+    return 0;
+}

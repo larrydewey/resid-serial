@@ -1,0 +1,158 @@
+// The entry points and every helper for hand-written instances, success
+// and failure paths.
+import "../src/serial.resid";
+import "../src/serial_test.resid";
+import "check.resid";
+
+VariantTok vt(Str e, Int i, Str v) { return variant_tok(e, i, v); }
+
+// A newtype-style record through write_struct1 / read_struct1.
+type Id = { Int id; };
+@needs(Encoder(F))
+Result(F, SerialError) enc_id(Id x, F s) { return write_struct1(s, "Id", "id", x.id); }
+Encode(Id, F) = enc_id;
+@needs(Decoder(F))
+Result(Parsed(Id, F), SerialError) dec_id(F s) {
+    Parsed(Int, F) p = read_struct1(s, "Id", "id")?;
+    return parsed(Id {.id = p.value}, p.rest);
+}
+Decode(Id, F) = dec_id;
+
+// write_named_if, write_elem and write_entry.
+type Opt = { Int a; Int b; };
+@needs(Encoder(F))
+Result(F, SerialError) enc_opt(Opt o, F s) {
+    Int n = if (o.b == 0) { 1 } else { 2 };
+    F s1 = write_struct_begin(s, "Opt", n)?;
+    F s2 = write_named(s1, "a", o.a)?;
+    F s3 = write_named_if(s2, o.b != 0, "b", o.b)?;
+    return write_struct_end(s3);
+}
+Encode(Opt, F) = enc_opt;
+
+type Pairs = { List(Str) ks; };
+@needs(Encoder(F))
+Result(F, SerialError) enc_pairs(Pairs p, F s) {
+    F s1 = write_map_begin(s, p.ks.len())?;
+    F s2 = enc_pairs_at(p.ks, 0, s1)?;
+    return write_map_end(s2);
+}
+@needs(Encoder(F))
+Result(F, SerialError) enc_pairs_at(List(Str) ks, Int i, F s) {
+    if (i >= ks.len()) { return Ok(s); }
+    F s1 = write_entry(s, ks[i], i)?;
+    return enc_pairs_at(ks, i + 1, s1);
+}
+Encode(Pairs, F) = enc_pairs;
+
+// An encoder that fails on its second element, to see write_elem's path.
+type Fussy = { Int n; };
+@needs(Encoder(F))
+Result(F, SerialError) enc_fussy(Fussy f, F s) {
+    if (f.n < 0) { return Err(custom_error("negative")); }
+    return write_int(s, f.n);
+}
+Encode(Fussy, F) = enc_fussy;
+type Row = { Fussy a; Fussy b; };
+@needs(Encoder(F))
+Result(F, SerialError) enc_row(Row r, F s) {
+    F s1 = write_seq_begin(s, 2)?;
+    F s2 = write_elem(s1, 0, r.a)?;
+    F s3 = write_elem(s2, 1, r.b)?;
+    return write_seq_end(s3);
+}
+Encode(Row, F) = enc_row;
+
+// A two-variant enum with a unit and a newtype variant.
+type Maybe = Nope | Yep(Id);
+List(Str) maybe_variants() { return ["Nope", "Yep"]; }
+@needs(Encoder(F))
+Result(F, SerialError) enc_maybe(Maybe m, F s) {
+    return match m { Nope => write_unit_variant(s, "Maybe", 0, "Nope"), Yep(i) => write_newtype_variant(s, "Maybe", 1, "Yep", i) };
+}
+Encode(Maybe, F) = enc_maybe;
+@needs(Decoder(F))
+Result(Parsed(Maybe, F), SerialError) dec_maybe(F s) {
+    Parsed(Int, F) v = read_variant(s, "Maybe", maybe_variants())?;
+    if (v.value == 0) { return read_unit_payload(v.rest, Nope); }
+    Parsed(Id, F) p = read_newtype_payload(v.rest, "Yep")?;
+    return parsed(Yep(p.value), p.rest);
+}
+Decode(Maybe, F) = dec_maybe;
+
+@needs(Show(T))
+Str show_r(Result(T, SerialError) r) { return f"{r}"; }
+
+Int main() {
+    // ── Entry points.
+    Result(TokEnc, SerialError) ev = encode_value([1, 2], token_encoder());
+    Bool e1 = check_text("encode_value", match ev { Ok(e) => f"{e.toks}", Err(x) => f"{x}" }, "[Seq(2), Int(1), Int(2), SeqEnd]");
+    Result(Int, SerialError) dv = decode_value(token_decoder([TokInt(9)]));
+    Bool e2 = check_text("decode_value", f"{dv}", "Ok(9)");
+    Result(Int, SerialError) dt = decode_value(token_decoder([TokInt(9), TokInt(10)]));
+    Bool e3 = check_text("decode_value rejects trailing", f"{dt}", "Err(trailing input after the value: Int(10))");
+    // decode_next: a stream of values, one at a time.
+    Result(Parsed(Int, TokDec), SerialError) n1 = decode_next(token_decoder([TokInt(1), TokStr("two")]));
+    Result(Str, SerialError) second = match n1 { Ok(p3) => decode_value(p3.rest), Err(x3) => Err(x3) };
+    Bool e4 = check_text("decode_next", f"{second}", "Ok(\"two\")");
+    Result(TokEnc, SerialError) enc_bad = encode_value(Row {.a = Fussy {.n = 1}, .b = Fussy {.n = -1}}, token_encoder());
+    Bool e5 = check_text("encode errors carry paths", match enc_bad { Ok(e) => "ok?", Err(x) => f"{x}" }, "negative at [1]");
+
+    // ── parsed
+    Result(Parsed(Str, Int), SerialError) pz = parsed("v", 42);
+    Bool p1 = check_text("parsed", match pz { Ok(p) => p.value + f" {p.rest}", Err(x) => "err" }, "v 42");
+
+    // ── write_struct1 / read_struct1
+    Id one = Id {.id = 7};
+    List(Token) idt = [TokStruct(struct_tok("Id", 1)), TokField("id"), TokInt(7), TokStructEnd];
+    Bool s1 = check("write_struct1/read_struct1", assert_tokens(one, idt));
+    Result(Id, SerialError) sk = from_tokens([TokStruct(struct_tok("Id", 2)), TokField("junk"), TokSeq(1), TokInt(0), TokSeqEnd, TokField("id"), TokInt(3), TokStructEnd]);
+    Bool s2 = check_text("read_struct1 skips unknown", f"{sk}", "Ok(Id { id: 3 })");
+    Result(Id, SerialError) sm = from_tokens([TokStruct(struct_tok("Id", 0)), TokStructEnd]);
+    Bool s3 = check_text("read_struct1 missing", f"{sm}", "Err(missing field `id`)");
+    Result(Id, SerialError) sd = from_tokens([TokStruct(struct_tok("Id", 2)), TokField("id"), TokInt(1), TokField("id"), TokInt(2), TokStructEnd]);
+    Bool s4 = check_text("read_struct1 duplicate", f"{sd}", "Err(duplicate field `id`)");
+    Result(Id, SerialError) sw = from_tokens([TokStruct(struct_tok("Other", 1)), TokField("id"), TokInt(1), TokStructEnd]);
+    Bool s5 = check_text("read_struct1 wrong name", f"{sw}", "Err(invalid type: expected struct Id, found struct Other)");
+    Result(Id, SerialError) sv = from_tokens([TokStruct(struct_tok("Id", 1)), TokField("id"), TokBool(true), TokStructEnd]);
+    Bool s6 = check_text("read_struct1 value path", f"{sv}", "Err(invalid type: expected Int, found Bool(true) at .id)");
+
+    // ── write_named / write_named_if
+    Bool w1 = check("write_named_if writes", assert_ser_tokens(Opt {.a = 1, .b = 2}, [TokStruct(struct_tok("Opt", 2)), TokField("a"), TokInt(1), TokField("b"), TokInt(2), TokStructEnd]));
+    Bool w2 = check("write_named_if skips", assert_ser_tokens(Opt {.a = 1, .b = 0}, [TokStruct(struct_tok("Opt", 1)), TokField("a"), TokInt(1), TokStructEnd]));
+
+    // ── write_entry / write_elem
+    Bool w3 = check("write_entry", assert_ser_tokens(Pairs {.ks = ["x", "y"]}, [TokMap(2), TokStr("x"), TokInt(0), TokStr("y"), TokInt(1), TokMapEnd]));
+    Bool w4 = check("write_elem", assert_ser_tokens(Row {.a = Fussy {.n = 1}, .b = Fussy {.n = 2}}, [TokSeq(2), TokInt(1), TokInt(2), TokSeqEnd]));
+
+    // ── Variants: write_unit_variant, write_newtype_variant, read_unit_payload, read_newtype_payload.
+    Bool v1 = check("unit variant", assert_tokens(Nope, [TokUnitVariant(vt("Maybe", 0, "Nope"))]));
+    Bool v2 = check("newtype variant", assert_tokens(Yep(one), [TokVariant(vt("Maybe", 1, "Yep"))].concat(idt).concat([TokVariantEnd])));
+    Result(Maybe, SerialError) vm1 = from_tokens([TokVariant(vt("Maybe", 0, "Nope")), TokInt(1), TokVariantEnd]);
+    Bool v3 = check_text("read_unit_payload on payload variant", f"{vm1}", "Err(invalid type: expected a unit variant, found a variant with a payload)");
+    Result(Maybe, SerialError) vm2 = from_tokens([TokUnitVariant(vt("Maybe", 1, "Yep"))]);
+    Bool v4 = check_text("read_newtype_payload on unit variant", f"{vm2}", "Err(invalid type: expected a variant with a payload, found a unit variant)");
+    Result(Maybe, SerialError) vm3 = from_tokens([TokVariant(vt("Maybe", 1, "Yep")), TokStruct(struct_tok("Id", 0)), TokStructEnd, TokVariantEnd]);
+    Bool v5 = check_text("payload errors carry the variant", f"{vm3}", "Err(missing field `id` at ::Yep)");
+
+    // ── Slot helpers.
+    Option(Int) empty = None;
+    Bool h1 = check_text("require some", f"{require(Some(1), "k")}", "Ok(1)");
+    Bool h2 = check_text("require none", f"{require(empty, "k")}", "Err(missing field `k`)");
+    Bool h3 = check("or_default", or_default(Some(2), 9) == 2 && or_default(empty, 9) == 9);
+    Option(Option(Int)) absent = None;
+    Option(Option(Int)) null = Some(None);
+    Bool h4 = check_text("flatten_opt", f"{flatten_opt(Some(Some(3)))} {flatten_opt(null)} {flatten_opt(absent)}", "Some(3) None None");
+    Bool h5 = check("name_index", name_index(["a", "b"], "b") == 1 && name_index(["a", "b"], "c") == -1 && name_index([], "a") == -1);
+    Result(Parsed(Option(Int), TokDec), SerialError) rs = read_slot(token_decoder([TokInt(4)]), empty, "k");
+    Bool h6 = check_text("read_slot fills", match rs { Ok(p) => f"{p.value}", Err(x) => f"{x}" }, "Some(4)");
+    Result(Parsed(Option(Int), TokDec), SerialError) rd = read_slot(token_decoder([TokInt(4)]), Some(1), "k");
+    Bool h7 = check_text("read_slot duplicate", match rd { Ok(p) => "ok?", Err(x) => f"{x}" }, "duplicate field `k`");
+    Result(Parsed(Option(Int), TokDec), SerialError) rp = read_slot(token_decoder([TokStr("s")]), empty, "k");
+    Bool h8 = check_text("read_slot path", match rp { Ok(p) => "ok?", Err(x) => f"{x}" }, "invalid type: expected Int, found Str(\"s\") at .k");
+    Result(TokDec, SerialError) su = skip_unknown(token_decoder([TokSeq(1), TokInt(1), TokSeqEnd, TokInt(5)]), "q", ["a"], false);
+    Bool h9 = check_text("skip_unknown skips", match su { Ok(d) => f"{d.pos}", Err(x) => f"{x}" }, "3");
+    Result(TokDec, SerialError) sn = skip_unknown(token_decoder([TokInt(1)]), "q", ["a"], true);
+    Bool h10 = check_text("skip_unknown denies", match sn { Ok(d) => "ok?", Err(x) => f"{x}" }, "unknown field `q`, expected `a`");
+    return 0;
+}

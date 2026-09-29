@@ -1,0 +1,22 @@
+ok   Indexed List(T)
+ok   Indexed List(T, N)
+ok   Indexed Str (code points)
+ok   Indexed Str(N)
+ok   Indexed Bytes(N)
+ok   utf8_count / utf8_width
+ok   fold_items
+ok   all_items
+ok   empty sequences
+ok   Build List(T)
+ok   Build List(T, N) pads, overflows
+ok   Build Str
+ok   Build Str(N) by bytes, whole code points only
+ok   Build Bytes(N)
+ok   Build from empty
+ok   StrBuf(N) push / push_char / finish
+ok   StrBuf(N) keeps nothing after an overflowing push
+ok   BytesBuf(N) try_finish
+ok   ListBuf(T, N) zero-fills
+ok   discard any builder
+ok   generic empty fixed literal
+exit 0

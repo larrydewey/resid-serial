@@ -1,0 +1,60 @@
+// Every error constructor, its kind and message; paths and the at_*
+// helpers; the Show instances.
+import "../src/serial.resid";
+import "check.resid";
+
+Str kind_of(SerialError e) { return error_kind_name(e.kind); }
+
+Int main() {
+    // Constructors: kind and exact message.
+    SerialError e1 = serial_error(ErrSyntax, "raw");
+    Bool a1 = check_text("serial_error", kind_of(e1) + ": " + error_text(e1), "syntax: raw");
+    Bool a2 = check_text("custom_error", kind_of(custom_error("boom")) + ": " + error_text(custom_error("boom")), "custom: boom");
+    Bool a3 = check_text("eof_error", kind_of(eof_error("a map")) + ": " + error_text(eof_error("a map")), "eof: unexpected end of input, expected a map");
+    Bool a4 = check_text("syntax_error", kind_of(syntax_error("bad token")) + ": " + error_text(syntax_error("bad token")), "syntax: bad token");
+    Bool a5 = check_text("invalid_type", kind_of(invalid_type("Int", "Str")) + ": " + error_text(invalid_type("Int", "Str")), "invalid_type: invalid type: expected Int, found Str");
+    Bool a6 = check_text("invalid_value", kind_of(invalid_value("300", "an Int(8)")) + ": " + error_text(invalid_value("300", "an Int(8)")), "invalid_value: invalid value 300, expected an Int(8)");
+    Bool a7 = check_text("invalid_length", kind_of(invalid_length(3, "2 elements")) + ": " + error_text(invalid_length(3, "2 elements")), "invalid_length: invalid length 3, expected 2 elements");
+    Bool a8 = check_text("unknown_field", kind_of(unknown_field("z", ["x", "y"])) + ": " + error_text(unknown_field("z", ["x", "y"])), "unknown_field: unknown field `z`, expected `x` or `y`");
+    Bool a9 = check_text("missing_field", kind_of(missing_field("x")) + ": " + error_text(missing_field("x")), "missing_field: missing field `x`");
+    Bool a10 = check_text("duplicate_field", kind_of(duplicate_field("x")) + ": " + error_text(duplicate_field("x")), "duplicate_field: duplicate field `x`");
+    Bool a11 = check_text("unknown_variant", kind_of(unknown_variant("C", ["A", "B"])) + ": " + error_text(unknown_variant("C", ["A", "B"])), "unknown_variant: unknown variant `C`, expected `A` or `B`");
+    Bool a12 = check_text("unsupported", kind_of(unsupported("bytes")) + ": " + error_text(unsupported("bytes")), "unsupported: bytes is not supported by this format");
+    Bool a13 = check_text("trailing_input", kind_of(trailing_input("Int(2)")) + ": " + error_text(trailing_input("Int(2)")), "trailing: trailing input after the value: Int(2)");
+
+    // Expected-name lists of every length.
+    List(Str) none = [];
+    Bool b1 = check_text("one_of 0", error_text(unknown_field("q", none)), "unknown field `q`, expected nothing");
+    Bool b2 = check_text("one_of 1", error_text(unknown_field("q", ["a"])), "unknown field `q`, expected `a`");
+    Bool b3 = check_text("one_of 3", error_text(unknown_variant("q", ["a", "b", "c"])), "unknown variant `q`, expected `a`, `b` or `c`");
+    Bool b4 = check_text("one_of 4", error_text(unknown_variant("q", ["a", "b", "c", "d"])), "unknown variant `q`, expected `a`, `b`, `c` or `d`");
+
+    // Every kind has a name.
+    List(ErrorKind) kinds = [ErrCustom, ErrEof, ErrSyntax, ErrInvalidType, ErrInvalidValue, ErrInvalidLength, ErrUnknownField, ErrMissingField, ErrDuplicateField, ErrUnknownVariant, ErrUnsupported, ErrTrailing];
+    Bool c1 = check_text("error kinds", f"{kinds}", "[custom, eof, syntax, invalid_type, invalid_value, invalid_length, unknown_field, missing_field, duplicate_field, unknown_variant, unsupported, trailing]");
+
+    // Paths: error_at prepends; the at_* helpers tag failures only.
+    SerialError deep = error_at(error_at(error_at(missing_field("n"), ".name"), "[3]"), ".items");
+    Bool d1 = check_text("error_path", error_path(deep), ".items[3].name");
+    Bool d2 = check_text("error_text with path", error_text(deep), "missing field `n` at .items[3].name");
+    Bool d3 = check_text("error_path top level", error_path(missing_field("n")), "");
+    Result(Int, SerialError) bad = Err(custom_error("x"));
+    Result(Int, SerialError) good = Ok(4);
+    Bool d4 = check_text("at_field", f"{at_field(bad, "f")}", "Err(x at .f)");
+    Bool d5 = check_text("at_index", f"{at_index(bad, 7)}", "Err(x at [7])");
+    Bool d6 = check_text("at_key", f"{at_key(bad, "k")}", "Err(x at [k])");
+    Bool d7 = check_text("at_variant", f"{at_variant(bad, "V")}", "Err(x at ::V)");
+    Bool d8 = check_text("at_seg", f"{at_seg(bad, "<s>")}", "Err(x at <s>)");
+    Bool d9 = check_text("at_* pass Ok through", f"{at_field(at_index(at_key(at_variant(good, "V"), "k"), 1), "f")}", "Ok(4)");
+    Bool d10 = check_text("at_* nest outermost first", f"{at_field(at_index(bad, 2), "list")}", "Err(x at .list[2])");
+    Result(Int, SerialError) miss = Err(missing_field("q"));
+    Result(Int, SerialError) tagged = at_field(miss, "f");
+    Bool d11 = check("path keeps kind", match tagged { Ok(v) => false, Err(e) => error_kind_name(e.kind) == "missing_field" });
+
+    // Show instances.
+    Bool e2 = check_text("Show(SerialError)", f"{deep}", "missing field `n` at .items[3].name");
+    Bool e3 = check_text("Show(ErrorKind)", f"{ErrUnsupported}", "unsupported");
+    List(Peek) peeks = [PeekUnit, PeekBool, PeekInt, PeekUInt, PeekI128, PeekU128, PeekFloat, PeekStr, PeekBytes, PeekNone, PeekSome, PeekSeq, PeekMap, PeekStruct("P"), PeekVariant];
+    Bool e4 = check_text("Show(Peek)", f"{peeks}", "[unit, a boolean, an integer, an unsigned integer, a 128-bit integer, an unsigned 128-bit integer, a float, a string, bytes, none, an option, a sequence, a map, a struct, an enum variant]");
+    return 0;
+}

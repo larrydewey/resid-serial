@@ -1,0 +1,231 @@
+// Encode(Value)/Decode(Value) over every variant, the Value encoder
+// (to_value) including misuse, and every path of the Value decoder
+// (from_value): coercions, lenient forms and errors.
+import "../src/serial.resid";
+import "../src/value.resid";
+import "../src/serial_test.resid";
+import "check.resid";
+
+VariantTok vt(Str e, Int i, Str v) { return variant_tok(e, i, v); }
+
+@needs(Show(T))
+Str sr(Result(T, SerialError) r) { return f"{r}"; }
+
+// Encoders that misuse the protocol, one way each.
+type Bad = { Int how; };
+@needs(Encoder(F))
+Result(F, SerialError) enc_bad(Bad b, F s) {
+    if (b.how == 0) { return write_seq_end(s); }
+    if (b.how == 1) { return write_field(s, "x"); }
+    if (b.how == 2) {
+        F s1 = write_variant_begin(s, "E", 0, "V")?;
+        return write_variant_end(s1);
+    }
+    if (b.how == 3) {
+        F s2 = write_some(s)?;
+        return write_seq_end(s2);
+    }
+    if (b.how == 4) {
+        F s3 = write_int(s, 1)?;
+        return write_int(s3, 2);
+    }
+    if (b.how == 5) { return write_seq_begin(s, 1); }
+    if (b.how == 6) {
+        F s4 = write_variant_begin(s, "E", 0, "V")?;
+        F s5 = write_int(s4, 1)?;
+        F s6 = write_int(s5, 2)?;
+        return write_variant_end(s6);
+    }
+    if (b.how == 7) {
+        F s7 = write_seq_begin(s, 1)?;
+        return write_field(s7, "x");
+    }
+    if (b.how == 8) { return write_str_char(s, 97); }
+    if (b.how == 9) {
+        F s8 = write_str_begin(s, 1, 1)?;
+        F s9 = write_int(s8, 1)?;
+        return write_str_end(s9);
+    }
+    if (b.how == 10) {
+        F s10 = write_str_begin(s, 1, 1)?;
+        F s11 = write_byte(s10, 1)?;
+        return write_str_end(s11);
+    }
+    if (b.how == 11) {
+        F s12 = write_bytes_begin(s, 1)?;
+        return write_str_char(s12, 97);
+    }
+    if (b.how == 12) { return write_byte(s, 1); }
+    F s13 = write_str_begin(s, 0, 0)?;
+    return write_bytes_end(s13);
+}
+Encode(Bad, F) = enc_bad;
+
+Str tv(Value v) { return sr(to_value(v)); }
+
+Int main() {
+    VTag tg = vtag("E", 1, "V");
+    Value rec = vstruct("P", [vfield("x", VInt(1)), vfield("y", VStr("s"))]);
+    List(Value) all = [
+        VUnit, VBool(true), VInt(-1), VUInt(u64(2)), VI128(i128(-3)), VU128(u128(4)), VFloat(1.5), VStr("q"), VBytes([1, 2]),
+        VNone, VSome(VInt(5)), VSeq([VInt(1), VNone]), VMap([ventry(VStr("k"), VInt(2)), ventry(VInt(3), VBool(false))]),
+        rec, VUnitVariant(tg), vvariant(tg, VSeq([]))
+    ];
+    // ── Encode(Value): every variant's tokens.
+    Result(List(Token), SerialError) toks = to_tokens(all);
+    Bool e1 = check_text("Encode(Value) tokens", sr(toks),
+        "Ok([Seq(16), Unit, Bool(true), Int(-1), UInt(2), I128(-3), U128(4), Float(1.5), Str(\"q\"), Bytes([1, 2]), None, Some, Int(5), Seq(2), Int(1), None, SeqEnd, Map(2), Str(\"k\"), Int(2), Int(3), Bool(false), MapEnd, Struct(P, 2), Field(x), Int(1), Field(y), Str(\"s\"), StructEnd, UnitVariant(E::V #1), Variant(E::V #1), Seq(0), SeqEnd, VariantEnd, SeqEnd])");
+    // ── Decode(Value): every Peek kind back from those tokens.
+    List(Token) none = [];
+    Result(List(Value), SerialError) back = from_tokens(toks else { none });
+    List(Value) nv = [];
+    List(Value) bv = back else { nv };
+    Bool e2 = check("Decode(Value) every kind", bv.len() == all.len() && values_all_eq(all, bv, 0));
+    Bool e3 = check_text("Decode(Value) loses no structure", f"{bv}", f"{all}");
+    // A struct decoded untyped keeps field names; a variant keeps its name.
+    Result(Value, SerialError) us = from_tokens([TokStruct(struct_tok("P", 1)), TokField("a"), TokSeq(1), TokNone, TokSeqEnd, TokStructEnd]);
+    Bool e4 = check_text("Decode(Value) struct", sr(us), "Ok(P { a: [None] })");
+    Result(Value, SerialError) uv = from_tokens([TokVariant(vt("E", 0, "V")), TokStruct(struct_tok("P", 0)), TokStructEnd, TokVariantEnd]);
+    Bool e5 = check_text("Decode(Value) variant", sr(uv), "Ok(E::V(P {}))");
+    Result(Value, SerialError) ue = from_tokens([TokSeqEnd]);
+    Bool e6 = check_text("Decode(Value) on an end marker", sr(ue), "Err(invalid type: expected a value, found SeqEnd)");
+    Result(Value, SerialError) up = from_tokens([TokSeq(2), TokInt(1), TokStr("x"), TokSeqEnd]);
+    Bool e7 = check_text("Decode(Value) mixed seq", sr(up), "Ok([1, \"x\"])");
+
+    // ── to_value: round trip of every variant, and misuse errors.
+    Bool t1 = check("to_value(Value) is identity", to_value_identity(all, 0));
+    Bool t2 = check_text("to_value of builtins", sr(to_value(Some([u8(1)]))) + " " + sr(to_value(unit())) + " " + sr(to_value(byte_buf([7]))), "Ok(Some([1u])) Ok(()) Ok(b[7])");
+    Map(Str, Int) m = {"b": 2, "a": 1};
+    Result(Int, Str) rok = Ok(3);
+    Bool t3 = check_text("to_value of map and result", sr(to_value(m)) + " " + sr(to_value(rok)), "Ok({\"a\": 1, \"b\": 2}) Ok(Result::Ok(3))");
+    Bool t4 = check_text("to_value misuse", str_join(misuse(0, []), " | "),
+        "Err(write_seq_end with nothing open) | Err(write_field outside a struct) | Err(write_variant_end: the variant has no payload) | Err(write_seq_end: the option has no payload) | Err(encoding produced 2 values, expected 1) | Err(encoding ended with a compound still open) | Err(a variant took a second payload) | Err(write_field outside a struct) | Err(write_str_char outside a string) | Err(a value inside a streamed string) | Err(write_byte inside a string) | Err(write_str_char inside bytes) | Err(write_byte outside bytes) | Err(write_bytes_end, but the open value needs write_str_end)");
+    VEnc fresh = value_encoder();
+    Bool t5 = check("value_encoder is human readable", encodes_human_readable(fresh));
+
+    // ── Fixed-capacity values stream into and out of Values.
+    Str(6) fixs = "hé";
+    Bytes(2) fixb = b"z";
+    List(Int, 2) fixl = [3];
+    Bool x1 = check_text("to_value of fixed values", sr(to_value(fixs)) + " " + sr(to_value(fixb)) + " " + sr(to_value(fixl)), "Ok(\"hé\") Ok(b[122, 0]) Ok([3, 0])");
+    Result(Str(6), SerialError) xs1 = from_value(VStr("héé"));
+    Result(Str(2), SerialError) xs2 = from_value(VStr("héé"));
+    Result(Bytes(2), SerialError) xb1 = from_value(VSeq([VInt(1)]));
+    Result(Bytes(2), SerialError) xb2 = from_value(VBytes([1, 2, 3]));
+    Result(List(Int, 2), SerialError) xl1 = from_value(VSeq([VInt(1), VInt(2)]));
+    Result(List(Int, 2), SerialError) xl2 = from_value(VSeq([VInt(1)]));
+    Bool x2 = check_text("from_value into fixed values", str_join([sr(xs1), sr(xs2), sr(xb1), sr(xb2), sr(xl1), sr(xl2)], " | "),
+        "Ok(\"héé\") | Err(invalid length 5, expected a string of at most 2 bytes) | Ok(b\"\\x01\\x00\") | Err(invalid length 3, expected at most 2 bytes) | Ok([1, 2]) | Err(invalid length 1, expected a sequence of 2)");
+    Result(Parsed(Int, VDec), SerialError) xsn = read_str_next(value_decoder(VStr("x")));
+    Result(Parsed(Int, VDec), SerialError) xbn = read_bytes_next(value_decoder(VBytes([1])));
+    Bool x3 = check_text("pulling without begin", match xsn { Ok(p) => "ok?", Err(e) => f"{e}" } + " / " + match xbn { Ok(q) => "ok?", Err(e2) => f"{e2}" }, "invalid type: expected the rest of a string, found a string / invalid type: expected the rest of some bytes, found bytes");
+
+    // ── from_value: integers across widths and signs.
+    Bool i1 = check_text("Int from UInt/I128/U128", sr(r_int(VUInt(u64(5)))) + " " + sr(r_int(VI128(i128(-6)))) + " " + sr(r_int(VU128(u128(7)))), "Ok(5) Ok(-6) Ok(7)");
+    Bool i2 = check_text("Int out of range", sr(r_int(VUInt(u64(9223372036854775808)))) + " " + sr(r_int(VI128(i128(-9223372036854775809)))) + " " + sr(r_int(VU128(u128(340282366920938463463374607431768211455)))),
+        "Err(invalid value 9223372036854775808, expected an Int) Err(invalid value -9223372036854775809, expected an Int) Err(invalid value 340282366920938463463374607431768211455, expected an integer)");
+    Bool i3 = check_text("Int from non-integer", sr(r_int(VFloat(1.0))) + " " + sr(r_int(VStr("1"))), "Err(invalid type: expected an integer, found a float) Err(invalid type: expected an integer, found a string)");
+    Result(UInt(64), SerialError) ua = from_value(VInt(5));
+    Result(UInt(64), SerialError) ub = from_value(VInt(-1));
+    Result(UInt(64), SerialError) uc = from_value(VU128(u128(18446744073709551616)));
+    Result(UInt(64), SerialError) ud = from_value(VBool(true));
+    Bool i4 = check_text("UInt paths", sr(ua) + " " + sr(ub) + " " + sr(uc) + " " + sr(ud), "Ok(5) Err(invalid value -1, expected a non-negative integer) Err(invalid value 18446744073709551616, expected a UInt) Err(invalid type: expected an unsigned integer, found a boolean)");
+    Result(Int(128), SerialError) wa = from_value(VInt(-5));
+    Result(Int(128), SerialError) wb = from_value(VU128(u128(340282366920938463463374607431768211455)));
+    Result(Int(128), SerialError) wc = from_value(VStr("x"));
+    Bool i5 = check_text("Int(128) paths", sr(wa) + " " + sr(wb) + " " + sr(wc), "Ok(-5) Err(invalid value 340282366920938463463374607431768211455, expected an Int(128)) Err(invalid type: expected an Int(128), found a string)");
+    Result(UInt(128), SerialError) xa = from_value(VUInt(u64(5)));
+    Result(UInt(128), SerialError) xb = from_value(VI128(i128(-1)));
+    Result(UInt(128), SerialError) xc = from_value(VNone);
+    Bool i6 = check_text("UInt(128) paths", sr(xa) + " " + sr(xb) + " " + sr(xc), "Ok(5) Err(invalid value -1, expected a non-negative integer) Err(invalid type: expected an unsigned 128-bit integer, found none)");
+    Result(Int(8), SerialError) na = from_value(VUInt(u64(300)));
+    Bool i7 = check_text("narrow ints through Value", sr(na), "Err(invalid value 300, expected an Int(8))");
+
+    // ── Other scalars.
+    Result(Float, SerialError) fa = from_value(VInt(2));
+    Result(Float, SerialError) fb = from_value(VUInt(u64(3)));
+    Result(Float, SerialError) fc = from_value(VStr("x"));
+    Bool s1 = check_text("Float from integers", sr(fa) + " " + sr(fb) + " " + sr(fc), "Ok(2) Ok(3) Err(invalid type: expected a float, found a string)");
+    Result(Bool, SerialError) ba = from_value(VInt(1));
+    Result(Str, SerialError) sa = from_value(VInt(1));
+    Result(Unit, SerialError) na1 = from_value(VNone);
+    Result(Unit, SerialError) na2 = from_value(VInt(0));
+    Bool s2 = check_text("bool/str/unit", sr(ba) + " " + sr(sa) + " " + unit_of(na1) + " " + unit_of(na2), "Err(invalid type: expected a boolean, found an integer) Err(invalid type: expected a string, found an integer) Ok(unit) invalid type: expected unit, found an integer");
+    Result(ByteBuf, SerialError) by1 = from_value(VBytes([1, 2]));
+    Result(ByteBuf, SerialError) by2 = from_value(VSeq([VInt(3), VUInt(u64(255)), VI128(i128(0))]));
+    Result(ByteBuf, SerialError) by3 = from_value(VSeq([VInt(256)]));
+    Result(ByteBuf, SerialError) by4 = from_value(VSeq([VStr("a")]));
+    Result(ByteBuf, SerialError) by5 = from_value(VInt(1));
+    Bool s3 = check_text("bytes paths", bytes_of(by1) + " " + bytes_of(by2) + " " + bytes_of(by3) + " " + bytes_of(by4) + " " + bytes_of(by5),
+        "[1, 2] [3, 255, 0] invalid type: expected a byte, found an integer invalid type: expected a byte, found a string invalid type: expected bytes, found an integer");
+
+    // ── Options: None/unit absent, Some unwrapped, other values present.
+    Result(Option(Int), SerialError) o1 = from_value(VNone);
+    Result(Option(Int), SerialError) o2 = from_value(VUnit);
+    Result(Option(Int), SerialError) o3 = from_value(VSome(VInt(1)));
+    Result(Option(Int), SerialError) o4 = from_value(VInt(2));
+    Result(Option(Option(Int)), SerialError) o5 = from_value(VSome(VNone));
+    Bool p1 = check_text("option paths", sr(o1) + " " + sr(o2) + " " + sr(o3) + " " + sr(o4) + " " + sr(o5), "Ok(None) Ok(None) Ok(Some(1)) Ok(Some(2)) Ok(Some(None))");
+
+    // ── Sequences and maps.
+    Result(List(Int), SerialError) q1 = from_value(VSeq([VInt(1), VUInt(u64(2))]));
+    Result(List(Int), SerialError) q2 = from_value(VMap([]));
+    Bool c1 = check_text("seq paths", sr(q1) + " " + sr(q2), "Ok([1, 2]) Err(invalid type: expected a sequence, found a map)");
+    Result(Map(Str, Int), SerialError) mp1 = from_value(VMap([ventry(VStr("a"), VInt(1))]));
+    Result(Map(Str, Int), SerialError) mp2 = from_value(rec);
+    Result(Map(Str, Int), SerialError) mp3 = from_value(VSeq([]));
+    Bool c2 = check_text("map paths", sr(mp1) + " " + sr(mp2) + " " + sr(mp3), "Ok({\"a\": 1}) Err(invalid type: expected an integer, found a string at [\"y\"]) Err(invalid type: expected a map, found a sequence)");
+    Result(Map(Str, Str), SerialError) mp4 = from_value(vstruct("", [vfield("k", VStr("v"))]));
+    Bool c3 = check_text("map from struct", sr(mp4), "Ok({\"k\": \"v\"})");
+
+    // ── Structs (via a Result-shaped enum and a Map of Values) and variants.
+    Result(Result(Int, Str), SerialError) v1 = from_value(VStr("Ok"));
+    Result(Result(Int, Str), SerialError) v2 = from_value(VMap([ventry(VStr("Ok"), VInt(4))]));
+    Result(Result(Int, Str), SerialError) v3 = from_value(VMap([ventry(VStr("Ok"), VInt(4)), ventry(VStr("Err"), VStr("e"))]));
+    Result(Result(Int, Str), SerialError) v4 = from_value(VMap([ventry(VInt(1), VInt(4))]));
+    Result(Result(Int, Str), SerialError) v5 = from_value(VInt(1));
+    Result(Result(Int, Str), SerialError) v6 = from_value(vvariant(vtag("", -1, "Err"), VStr("x")));
+    Result(Result(Int, Str), SerialError) v7 = from_value(VUnitVariant(vtag("", -1, "Nope")));
+    Bool d1 = check_text("variant paths", str_join([sr(v1), sr(v2), sr(v3), sr(v4), sr(v5), sr(v6), sr(v7)], " | "),
+        "Err(invalid type: expected a variant with a payload, found a unit variant) | Ok(Ok(4)) | Err(invalid length 2, expected a map with one entry (a variant)) | Err(invalid type: expected a variant name, found an integer) | Err(invalid type: expected an enum variant, found an integer) | Ok(Err(\"x\")) | Err(unknown variant `Nope`, expected `Ok` or `Err`)");
+
+    // ── Trailing, end of input, and the decoder's own verbs.
+    VDec d0 = value_decoder(VInt(1));
+    Bool r1 = check("value_decoder is human readable", decodes_human_readable(d0));
+    Result(VDec, SerialError) sk = read_skip(d0);
+    Result(Parsed(Peek, VDec), SerialError) pk = read_peek(d0);
+    Bool r2 = check_text("read_skip / read_peek", match sk { Ok(d) => end_ok(read_end(d)), Err(e) => f"{e}" } + " " + match pk { Ok(p) => f"{p.value}", Err(e2) => f"{e2}" }, "ended an integer");
+    Result(Parsed(Peek, VDec), SerialError) pk2 = read_peek(VDec {.stack = TsNil});
+    Bool r3 = check_text("read_peek at end", match pk2 { Ok(p2) => "ok?", Err(e3) => f"{e3}" }, "unexpected end of input, expected a value");
+    Result(VDec, SerialError) tr = read_end(d0);
+    Bool r4 = check_text("read_end with input left", match tr { Ok(d2) => "ok?", Err(e4) => f"{e4}" }, "trailing input after the value: an integer");
+    Result(Parsed(Int, VDec), SerialError) eo = read_int(VDec {.stack = TsNil});
+    Bool r5 = check_text("read at end", match eo { Ok(p3) => "ok?", Err(e5) => f"{e5}" }, "unexpected end of input, expected an integer");
+    return 0;
+}
+
+Result(Int, SerialError) r_int(Value v) { return from_value(v); }
+
+Str end_ok(Result(VDec, SerialError) r) { return match r { Ok(d) => "ended", Err(e) => f"{e}" }; }
+
+Str unit_of(Result(Unit, SerialError) r) { return match r { Ok(x) => "Ok(unit)", Err(e) => f"{e}" }; }
+
+Str bytes_of(Result(ByteBuf, SerialError) r) { return match r { Ok(b) => f"{b.bytes}", Err(e) => f"{e}" }; }
+
+Bool values_all_eq(List(Value) a, List(Value) b, Int i) {
+    if (i >= a.len()) { return true; }
+    return value_eq(a[i], b[i]) && values_all_eq(a, b, i + 1);
+}
+
+Bool to_value_identity(List(Value) vs, Int i) {
+    if (i >= vs.len()) { return true; }
+    Result(Value, SerialError) r = to_value(vs[i]);
+    Bool same = match r { Ok(v) => value_eq(v, vs[i]) && f"{v}" == f"{vs[i]}", Err(e) => false };
+    return same && to_value_identity(vs, i + 1);
+}
+
+List(Str) misuse(Int how, List(Str) acc) {
+    if (how > 13) { return acc; }
+    Result(Value, SerialError) r = to_value(Bad {.how = how});
+    return misuse(how + 1, acc.concat([f"{r}"]));
+}

@@ -1,0 +1,207 @@
+// compact.resid — a positional test format (bincode-like): a flat list of
+// integers with no field names, tags or end markers. It exercises the
+// protocol from the non-self-describing side: fields are reported in
+// declaration order, and read_peek / read_skip are unsupported. Test-only.
+
+import "../../src/serial.resid";
+
+type CompactEnc = { List(Int) out; };
+
+pub CompactEnc compact_encoder() {
+    List(Int) none = [];
+    return CompactEnc {.out = none};
+}
+
+Result(CompactEnc, SerialError) ce_put(CompactEnc e, List(Int) ws) { return Ok(CompactEnc {.out = e.out.concat(ws)}); }
+
+List(Int) str_words(Str s) { return str_words_at(s, 0, [str_len(s)]); }
+
+List(Int) str_words_at(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
+    return str_words_at(s, i + 1, acc.concat([str_char_at(s, i)]));
+}
+
+Result(CompactEnc, SerialError) ce_unit(CompactEnc e) { return Ok(e); }
+Result(CompactEnc, SerialError) ce_bool(CompactEnc e, Bool v) { return ce_put(e, [if (v) { 1 } else { 0 }]); }
+Result(CompactEnc, SerialError) ce_int(CompactEnc e, Int v) { return ce_put(e, [v]); }
+Result(CompactEnc, SerialError) ce_uint(CompactEnc e, UInt(64) v) {
+    if (v > u64(9223372036854775807)) { return Err(unsupported("a UInt above Int's range")); }
+    return ce_put(e, [(Int)v]);
+}
+// 128-bit integers as their decimal text (a test format need not be dense).
+Result(CompactEnc, SerialError) ce_i128(CompactEnc e, Int(128) v) { return ce_put(e, str_words(f"{v}")); }
+Result(CompactEnc, SerialError) ce_u128(CompactEnc e, UInt(128) v) { return ce_put(e, str_words(f"{v}")); }
+Result(CompactEnc, SerialError) ce_float(CompactEnc e, Float v) { return ce_put(e, str_words(f"{v}")); }
+Result(CompactEnc, SerialError) ce_str(CompactEnc e, Str v) { return ce_put(e, str_words(v)); }
+Result(CompactEnc, SerialError) ce_bytes(CompactEnc e, List(Int) v) { return ce_put(e, [v.len()].concat(v)); }
+Result(CompactEnc, SerialError) ce_none(CompactEnc e) { return ce_put(e, [0]); }
+// Streamed strings and bytes have the whole ones' layout: count, items.
+Result(CompactEnc, SerialError) ce_str_begin(CompactEnc e, Int chars, Int bytes) { return ce_put(e, [chars]); }
+Result(CompactEnc, SerialError) ce_item(CompactEnc e, Int x) { return ce_put(e, [x]); }
+Result(CompactEnc, SerialError) ce_bytes_begin(CompactEnc e, Int len) { return ce_put(e, [len]); }
+Result(CompactEnc, SerialError) ce_some(CompactEnc e) { return ce_put(e, [1]); }
+Result(CompactEnc, SerialError) ce_len(CompactEnc e, Int len) { return ce_put(e, [len]); }
+Result(CompactEnc, SerialError) ce_pass(CompactEnc e) { return Ok(e); }
+Result(CompactEnc, SerialError) ce_struct_begin(CompactEnc e, Str name, Int len) { return Ok(e); }
+Result(CompactEnc, SerialError) ce_field(CompactEnc e, Str key) { return Ok(e); }
+Result(CompactEnc, SerialError) ce_unit_variant(CompactEnc e, Str enum_name, Int index, Str variant) { return ce_put(e, [index]); }
+Result(CompactEnc, SerialError) ce_variant_begin(CompactEnc e, Str enum_name, Int index, Str variant) { return ce_put(e, [index]); }
+Bool ce_human(CompactEnc e) { return false; }
+
+Encoder(CompactEnc) = {
+    .write_unit = ce_unit, .write_bool = ce_bool, .write_int = ce_int, .write_uint = ce_uint,
+    .write_i128 = ce_i128, .write_u128 = ce_u128,
+    .write_float = ce_float, .write_str = ce_str, .write_bytes = ce_bytes, .write_none = ce_none,
+    .write_str_begin = ce_str_begin, .write_str_char = ce_item, .write_str_end = ce_pass,
+    .write_bytes_begin = ce_bytes_begin, .write_byte = ce_item, .write_bytes_end = ce_pass,
+    .write_some = ce_some, .write_seq_begin = ce_len, .write_seq_elem = ce_pass, .write_seq_end = ce_pass,
+    .write_map_begin = ce_len, .write_map_key = ce_pass, .write_map_value = ce_pass, .write_map_end = ce_pass,
+    .write_struct_begin = ce_struct_begin, .write_field = ce_field, .write_struct_end = ce_pass,
+    .write_unit_variant = ce_unit_variant, .write_variant_begin = ce_variant_begin, .write_variant_end = ce_pass,
+    .encodes_human_readable = ce_human
+};
+
+@needs(Encode(T, CompactEnc))
+pub Result(List(Int), SerialError) to_compact(T x) {
+    CompactEnc e = encode(x, compact_encoder())?;
+    return Ok(e.out);
+}
+
+// The words, the read position, and a stack of open compounds: for a
+// sequence or map the parts left, for a struct the next field index
+// (stored as -1 - index, to tell the two apart).
+type CompactDec = { List(Int) ws; Int pos; List(Int) open; };
+
+CompactDec cd_with(CompactDec d, Int pos, List(Int) open) { return CompactDec {.ws = d.ws, .pos = pos, .open = open}; }
+
+Result(Parsed(Int, CompactDec), SerialError) cd_word(CompactDec d, Str expected) {
+    if (d.pos >= d.ws.len()) { return Err(eof_error(expected)); }
+    return parsed(d.ws[d.pos], cd_with(d, d.pos + 1, d.open));
+}
+
+Result(Parsed(Str, CompactDec), SerialError) cd_text(CompactDec d, Str expected) {
+    Parsed(Int, CompactDec) n = cd_word(d, expected)?;
+    if (n.value < 0 || n.rest.pos + n.value > d.ws.len()) { return Err(invalid_length(n.value, expected)); }
+    return parsed(codes_str(d.ws, n.rest.pos, n.rest.pos + n.value, ""), cd_with(d, n.rest.pos + n.value, d.open));
+}
+
+Str codes_str(List(Int) ws, Int i, Int end, Str acc) {
+    if (i >= end) { return acc; }
+    return codes_str(ws, i + 1, end, acc + str_from_code(ws[i]));
+}
+
+Result(CompactDec, SerialError) cd_unit(CompactDec d) { return Ok(d); }
+Result(Parsed(Bool, CompactDec), SerialError) cd_bool(CompactDec d) {
+    Parsed(Int, CompactDec) w = cd_word(d, "a boolean")?;
+    return parsed(w.value != 0, w.rest);
+}
+Result(Parsed(Int, CompactDec), SerialError) cd_int(CompactDec d) { return cd_word(d, "an integer"); }
+Result(Parsed(UInt(64), CompactDec), SerialError) cd_uint(CompactDec d) {
+    Parsed(Int, CompactDec) w = cd_word(d, "an unsigned integer")?;
+    if (w.value < 0) { return Err(invalid_value(f"{w.value}", "an unsigned integer")); }
+    return parsed((UInt(64))w.value, w.rest);
+}
+Result(Parsed(Int(128), CompactDec), SerialError) cd_i128(CompactDec d) {
+    Parsed(Str, CompactDec) t = cd_text(d, "an Int(128)")?;
+    if (!is_decimal_text(t.value) || str_contains(t.value, ".")) { return Err(invalid_value(t.value, "an Int(128)")); }
+    return parsed(parse_i128(t.value), t.rest);
+}
+
+Result(Parsed(UInt(128), CompactDec), SerialError) cd_u128(CompactDec d) {
+    Parsed(Str, CompactDec) t = cd_text(d, "a UInt(128)")?;
+    if (!is_decimal_text(t.value) || str_contains(t.value, ".") || str_starts_with(t.value, "-")) { return Err(invalid_value(t.value, "a UInt(128)")); }
+    return parsed((UInt(128))parse_i128_digits(t.value, 0, u128(0)), t.rest);
+}
+
+Int(128) parse_i128(Str t) {
+    if (str_starts_with(t, "-")) { return i128(0) - (Int(128))parse_i128_digits(t, 1, u128(0)); }
+    return (Int(128))parse_i128_digits(t, 0, u128(0));
+}
+
+UInt(128) parse_i128_digits(Str t, Int i, UInt(128) acc) {
+    if (i >= str_len(t)) { return acc; }
+    Int c = str_char_at(t, i);
+    if (c == 43) { return parse_i128_digits(t, i + 1, acc); }
+    return parse_i128_digits(t, i + 1, acc * u128(10) + (UInt(128))(c - 48));
+}
+
+Result(Parsed(Float, CompactDec), SerialError) cd_float(CompactDec d) {
+    Parsed(Str, CompactDec) t = cd_text(d, "a float")?;
+    if (!str_is_float(t.value) && !str_is_int(t.value)) { return Err(invalid_value(t.value, "a float")); }
+    return parsed(str_parse_float(t.value), t.rest);
+}
+Result(Parsed(Str, CompactDec), SerialError) cd_str(CompactDec d) { return cd_text(d, "a string"); }
+Result(Parsed(List(Int), CompactDec), SerialError) cd_bytes(CompactDec d) {
+    Parsed(Int, CompactDec) n = cd_word(d, "bytes")?;
+    Int end = n.rest.pos + n.value;
+    if (n.value < 0 || end > d.ws.len()) { return Err(invalid_length(n.value, "bytes")); }
+    return parsed(d.ws[n.rest.pos..end], cd_with(d, end, d.open));
+}
+Result(Parsed(Bool, CompactDec), SerialError) cd_option(CompactDec d) { return cd_bool(d); }
+
+// Pulling a string or bytes: the count goes on the open stack like a
+// sequence's, each item is one word.
+Result(Parsed(Int, CompactDec), SerialError) cd_items_next(CompactDec d) {
+    Parsed(Bool, CompactDec) more = cd_len_next(d)?;
+    if (!more.value) { return parsed(-1, more.rest); }
+    return cd_word(more.rest, "an item");
+}
+
+Result(Parsed(Int, CompactDec), SerialError) cd_len_begin(CompactDec d) {
+    Parsed(Int, CompactDec) n = cd_word(d, "a length")?;
+    return parsed(n.value, cd_with(n.rest, n.rest.pos, n.rest.open.concat([n.value])));
+}
+
+Result(Parsed(Bool, CompactDec), SerialError) cd_len_next(CompactDec d) {
+    Int k = d.open.len();
+    if (k == 0) { return Err(custom_error("no sequence is open")); }
+    Int left = d.open[k - 1];
+    if (left <= 0) { return parsed(false, cd_with(d, d.pos, d.open[0..k - 1])); }
+    return parsed(true, cd_with(d, d.pos, d.open[0..k - 1].concat([left - 1])));
+}
+
+Result(CompactDec, SerialError) cd_pass(CompactDec d) { return Ok(d); }
+
+Result(CompactDec, SerialError) cd_struct_begin(CompactDec d, Str name, List(Str) fields) { return Ok(cd_with(d, d.pos, d.open.concat([-1]))); }
+
+Result(Parsed(FieldKey, CompactDec), SerialError) cd_field(CompactDec d, List(Str) fields) {
+    Int k = d.open.len();
+    if (k == 0 || d.open[k - 1] >= 0) { return Err(custom_error("no struct is open")); }
+    Int next = -1 - d.open[k - 1];
+    if (next >= fields.len()) { return parsed(EndOfFields, cd_with(d, d.pos, d.open[0..k - 1])); }
+    return parsed(KnownField(next), cd_with(d, d.pos, d.open[0..k - 1].concat([-2 - next])));
+}
+
+Result(Parsed(Int, CompactDec), SerialError) cd_variant(CompactDec d, Str enum_name, List(Str) variants) {
+    Parsed(Int, CompactDec) i = cd_word(d, "a variant index")?;
+    if (i.value < 0 || i.value >= variants.len()) { return Err(invalid_value(f"{i.value}", "a variant index of " + enum_name)); }
+    return parsed(i.value, i.rest);
+}
+
+Result(Parsed(VariantName, CompactDec), SerialError) cd_variant_name(CompactDec d) { return Err(unsupported("decoding a variant without its type")); }
+Result(CompactDec, SerialError) cd_skip(CompactDec d) { return Err(unsupported("skipping a value")); }
+Result(Parsed(Peek, CompactDec), SerialError) cd_peek(CompactDec d) { return Err(unsupported("decoding without a type")); }
+Result(CompactDec, SerialError) cd_end(CompactDec d) {
+    if (d.pos < d.ws.len()) { return Err(trailing_input(f"{d.ws.len() - d.pos} word(s)")); }
+    return Ok(d);
+}
+Bool cd_human(CompactDec d) { return false; }
+
+Decoder(CompactDec) = {
+    .read_unit = cd_unit, .read_bool = cd_bool, .read_int = cd_int, .read_uint = cd_uint,
+    .read_i128 = cd_i128, .read_u128 = cd_u128,
+    .read_float = cd_float, .read_str = cd_str, .read_bytes = cd_bytes, .read_option = cd_option,
+    .read_str_begin = cd_len_begin, .read_str_next = cd_items_next, .read_bytes_begin = cd_len_begin, .read_bytes_next = cd_items_next,
+    .read_seq_begin = cd_len_begin, .read_seq_next = cd_len_next, .read_map_begin = cd_len_begin,
+    .read_map_next = cd_len_next, .read_map_value = cd_pass, .read_struct_begin = cd_struct_begin,
+    .read_field = cd_field, .read_variant = cd_variant, .read_variant_name = cd_variant_name,
+    .read_variant_unit = cd_pass, .read_variant_payload = cd_pass,
+    .read_variant_end = cd_pass, .read_skip = cd_skip, .read_peek = cd_peek, .read_end = cd_end,
+    .decodes_human_readable = cd_human
+};
+
+@needs(Decode(T, CompactDec))
+pub Result(T, SerialError) from_compact(List(Int) ws) {
+    List(Int) none = [];
+    return decode_value(CompactDec {.ws = ws, .pos = 0, .open = none});
+}

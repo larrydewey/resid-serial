@@ -1,0 +1,10 @@
+Point { x: 1, y: -2, label: "origin", z: Some(5) }
+Ok(Point { x: 1, y: -2, label: "origin", z: Some(5) })
+[Shape::Circle(1.5), Shape::Square(Point { x: 1, y: -2, label: "origin", z: Some(5) }), Shape::Empty]
+Ok([Circle(1.5), Square(Point { x: 1, y: -2, label: "origin", z: Some(5) }), Empty])
+Err(missing field `x`)
+Err(invalid type: expected an integer, found a string at [0]::Square.x)
+Err(unknown variant `Hexagon`, expected `Circle`, `Square` or `Empty`)
+Ok(Point { x: 7, y: 8, label: "", z: None })
+7
+exit 0

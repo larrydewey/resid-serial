@@ -1,0 +1,6 @@
+ok   100k list through Value
+ok   100k list through compact
+ok   20k list through tokens
+ok   20k map through Value
+ok   depth 2000 nesting
+exit 0

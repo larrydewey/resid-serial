@@ -1,0 +1,48 @@
+ok   show_token every token
+ok   token_eq reflexive
+ok   token_eq distinct neighbours
+ok   token_eq payloads
+ok   Eq(Token) ==
+ok   to_tokens
+ok   token encoder/decoder are human readable
+ok   read_skip every value kind
+ok   read_skip unterminated
+ok   read_peek every value token
+ok   read_peek at end
+ok   read_peek struct name
+ok   struct name mismatch
+ok   untyped struct keeps its name
+ok   field expected
+ok   struct expected
+ok   read_variant_name
+ok   read_variant_name wrong token
+ok   read_variant_end wrong token
+ok   streamed string is one Str token
+ok   streamed bytes are one Bytes token
+ok   stream misuse
+ok   Str(N) and Bytes(N) tokens are the whole ones'
+ok   pulling misuse
+-- expected failure reports:
+assert_ser_tokens: token mismatch
+  expected [Int(2)]
+  got      [Int(1)]
+ok   assert_ser_tokens reports a mismatch
+assert_ser_tokens: encoding failed: cannot encode Nope
+ok   assert_ser_tokens reports an encode failure
+assert_de_tokens: decoding failed: invalid type: expected Int, found Str("x")
+ok   assert_de_tokens reports a decode failure
+assert_ser_tokens: token mismatch
+  expected [Map(2), Str("a"), Int(1), Str("a"), Int(5), MapEnd]
+  got      [Map(1), Str("a"), Int(5), MapEnd]
+ok   assert_de_tokens reports a re-encode mismatch
+assert_ser_tokens: token mismatch
+  expected [Int(2)]
+  got      [Int(1)]
+ok   assert_tokens fails when one side fails
+assert_de_error: wrong error
+  expected some other message
+  got      invalid type: expected Int, found Str("x")
+ok   assert_de_error reports a wrong error
+assert_de_error: decoding succeeded, expected error: anything
+ok   assert_de_error reports success
+exit 0

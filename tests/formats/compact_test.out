@@ -1,0 +1,35 @@
+ok   bool
+ok   int
+ok   narrow ints
+ok   narrow uints
+ok   u64 in range
+ok   i128
+ok   u128
+ok   floats
+ok   f32
+ok   f16
+ok   str
+ok   empty str
+ok   dec
+ok   Str(N)
+ok   Bytes(N)
+ok   streamed layouts equal whole ones
+ok   fixed overflow through a positional format
+ok   bytes
+ok   unit
+ok   options
+ok   List(T, N)
+ok   set
+ok   map
+ok   result
+ok   derived record
+ok   derived enum
+ok   derived generic
+ok   derived recursive
+ok   transparent
+ok   positional layout
+ok   no untyped decoding
+ok   format-specific unsupported value
+ok   malformed input
+ok   compact is not human readable
+exit 0

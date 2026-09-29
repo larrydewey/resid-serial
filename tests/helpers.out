@@ -1,0 +1,32 @@
+ok   encode_value
+ok   decode_value
+ok   decode_value rejects trailing
+ok   decode_next
+ok   encode errors carry paths
+ok   parsed
+ok   write_struct1/read_struct1
+ok   read_struct1 skips unknown
+ok   read_struct1 missing
+ok   read_struct1 duplicate
+ok   read_struct1 wrong name
+ok   read_struct1 value path
+ok   write_named_if writes
+ok   write_named_if skips
+ok   write_entry
+ok   write_elem
+ok   unit variant
+ok   newtype variant
+ok   read_unit_payload on payload variant
+ok   read_newtype_payload on unit variant
+ok   payload errors carry the variant
+ok   require some
+ok   require none
+ok   or_default
+ok   flatten_opt
+ok   name_index
+ok   read_slot fills
+ok   read_slot duplicate
+ok   read_slot path
+ok   skip_unknown skips
+ok   skip_unknown denies
+exit 0

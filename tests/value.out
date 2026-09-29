@@ -1,0 +1,34 @@
+ok   show_value every variant
+ok   ventry/vfield/vtag fields
+ok   value_kind every variant
+ok   value_eq reflexive
+ok   value_eq distinct neighbours
+ok   value_eq integers across widths
+ok   value_eq integer signs
+ok   value_eq huge u128
+ok   value_eq names optional
+ok   value_eq field order and names
+ok   value_eq variants
+ok   value_eq containers
+ok   Eq(Value) ==
+ok   as_wide_int
+ok   as_wide_uint
+ok   value_field struct/map/other
+ok   value_field_in
+ok   get_field
+ok   get_field_or
+ok   get_field_in(_or)
+ok   is_unit_value
+ok   flatten_fields
+ok   flatten_fields errors
+ok   without_fields
+ok   split_internal_tag
+ok   split_internal_tag errors
+ok   split_adjacent_tag
+ok   split_adjacent_tag errors
+ok   write_internally_tagged
+ok   write_internally_tagged unit
+ok   write_internally_tagged non-struct payload
+ok   write_adjacent
+ok   write_adjacent_unit
+exit 0

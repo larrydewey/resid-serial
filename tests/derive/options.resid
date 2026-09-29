@@ -1,0 +1,143 @@
+// Every resid-derive option and placement; options_serial.resid is
+// generated from this file. Decoys the scanner must not mistake for
+// declarations sit in strings, comments and function bodies.
+
+/* type Fake = { Int x; };   //@ serial */
+Str decoy_text() { return "type Decoy = { Int x; }; //@ serial"; }
+Int decoy_braces(Int n) { if (n > 0) { return decoy_braces(n - 1); } return 0; }
+
+// ── Zero values for `default` on every kind of field.
+//@ serial
+type Zeros = {
+    Int a;             //@ default
+    Int(8) b;          //@ default
+    UInt(64) c;        //@ default
+    UInt(16) d;        //@ default
+    Float e;           //@ default
+    Float(32) f;       //@ default
+    Str g;             //@ default
+    Bool h;            //@ default
+    Option(Int) i;     //@ default
+    List(Str) j;       //@ default
+    Map(Str, Int) k;   //@ default
+    Set(Int) l;        //@ default
+    Int(128) m;        //@ default
+    Str(4) n;          //@ default
+    Bytes(2) o;        //@ default
+    List(Int, 2) p;    //@ default
+};
+
+// ── default = fn, skip_encoding, skip_decoding, several aliases, and
+// annotations on the line before a field and spread over two lines.
+pub Int forty_two() { return 42; }
+pub List(Int) seed() { return [1, 2]; }
+
+//@ serial
+//@ serial(rename = "Knobs")
+type Knobs = {
+    //@ default = "forty_two"
+    Int answer;
+    List(Int) seeds;   //@ default = "seed", alias = "s1"
+    //@ alias = "s2"
+    //@ alias = "s3"
+    Str name;          //@ skip_encoding
+    Str note;          //@ skip_decoding, default
+    Int count; };      //@ alias = "n"
+
+// ── rename_all: every rule, on fields and on variants.
+//@ serial(rename_all = "lowercase")
+type RLower = { Int first_name; Int id; };
+//@ serial(rename_all = "UPPERCASE")
+type RUpper = { Int first_name; Int id; };
+//@ serial(rename_all = "PascalCase")
+type RPascal = { Int first_name; Int id; };
+//@ serial(rename_all = "camelCase")
+type RCamel = { Int first_name; Int id; };
+//@ serial(rename_all = "snake_case")
+type RSnake = { Int first_name; Int id; };
+//@ serial(rename_all = "SCREAMING_SNAKE_CASE")
+type RScreaming = { Int first_name; Int id; };
+//@ serial(rename_all = "kebab-case")
+type RKebab = { Int first_name; Int id; };
+//@ serial(rename_all = "SCREAMING-KEBAB-CASE")
+type RScreamingKebab = { Int first_name; Int id; };
+
+//@ serial(rename_all = "lowercase")
+type VLower = LowerVariant | LowerTwo;
+//@ serial(rename_all = "UPPERCASE")
+type VUpper = UpperVariant | UpperTwo;
+//@ serial(rename_all = "PascalCase")
+type VPascal = PascalVariant | PascalTwo;
+//@ serial(rename_all = "camelCase")
+type VCamel = CamelVariant | CamelTwo;
+//@ serial(rename_all = "snake_case")
+type VSnake = SnakeVariant | SnakeTwo;
+//@ serial(rename_all = "SCREAMING_SNAKE_CASE")
+type VScreaming = ScreamingVariant | ScreamingTwo;
+//@ serial(rename_all = "kebab-case")
+type VKebab = KebabVariant | KebabTwo;
+//@ serial(rename_all = "SCREAMING-KEBAB-CASE")
+type VScreamingKebab = ScreamingKebabVariant | ScreamingKebabTwo;
+
+// ── rename beats rename_all; container rename.
+//@ serial(rename = "Renamed", rename_all = "UPPERCASE")
+type RenameBoth = { Int kept_name; Int other; };   //@ rename = "custom"
+
+// ── One side only.
+//@ serial(encode)
+type EncOnly = { Int a; };
+//@ serial(decode)
+type DecOnly = { Int a; };
+
+// ── Generics: a parameter named F, two parameters, nested field types,
+// a generic transparent record, an empty record.
+//@ serial
+type Holder(F) = { F item; List(F) more; };
+//@ serial
+type Both(A, B) = { A left; Option(B) right; };
+//@ serial
+type Nest = { Map(Str, List(Both(Int, Str))) table; };
+//@ serial(transparent)
+type Wrap(T) = { T inner; };
+//@ serial
+type Nothing0 = {};
+
+// ── deny_unknown_fields with aliases.
+//@ serial(deny_unknown_fields)
+type Strict = { Int a; };          //@ alias = "b"
+
+// ── flatten: two flattened fields, a Map one, skip_encoding_if beside it.
+//@ serial
+type Inner1 = { Int x; Int y; };
+//@ serial
+type Inner2 = { Str label; };
+pub Bool is_zero(Int n) { return n == 0; }
+//@ serial
+type Flat = {
+    Str id;
+    Inner1 pos;                      //@ flatten
+    Inner2 tag;                      //@ flatten
+    Int extra;                       //@ skip_encoding_if = "is_zero", default
+};
+//@ serial
+type FlatMap = { Str id; Map(Str, Int) rest; };   //@ flatten
+
+// ── Enums: externally tagged with a skipped variant and aliases, all
+// representations with renames, single-line and multi-line layouts.
+//@ serial
+pub type Ext = Keep(Int) | Drop(Str) | Other;   //@ alias = "Else"
+//@ serial
+type Skippy = Shown(Int)
+    | Hidden(Int)    //@ skip
+    | Last;
+
+//@ serial(tag = "kind", rename_all = "snake_case")
+type Internal = UnitCase | StructCase(Inner1) | MapCase(Map(Str, Int)) | Scalar(Int);
+//@ serial(tag = "t", content = "c")
+type Adjacent = AUnit | AOne(Int) | ARec(Inner1);   //@ rename = "rec"
+//@ serial(untagged)
+type Untagged = UInt1(Int) | UStr(Str) | URec(Inner1) | UNone | UHidden(Str);   //@ skip
+
+// ── A generic enum in a Value-based representation.
+//@ serial(tag = "k")
+type GenTag(T) = GOne(Holder(T)) | GNone;

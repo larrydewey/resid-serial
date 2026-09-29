@@ -1,0 +1,7 @@
+# Built binaries and scratch output
+*.bin
+*.ll
+*.resid-notes.cbor
+*.resid-prov*
+*.resid-graph.cbor
+.claude/

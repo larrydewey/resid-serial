@@ -1,0 +1,167 @@
+// Every builtin instance: its exact tokens both ways, its boundaries, and
+// every way decoding it fails.
+import "../src/serial.resid";
+import "../src/serial_test.resid";
+import "check.resid";
+
+VariantTok vt(Str e, Int i, Str v) { return variant_tok(e, i, v); }
+
+// Decode `toks` as a T and show the result.
+@needs(Decode(T, TokDec), Show(T))
+Str de(T sample, List(Token) toks) {
+    Result(T, SerialError) r = from_tokens(toks);
+    return f"{r}";
+}
+
+Int main() {
+    // ── Bool, Int, UInt(64)
+    Bool b1 = check("bool true", assert_tokens(true, [TokBool(true)]));
+    Bool b2 = check("bool false", assert_tokens(false, [TokBool(false)]));
+    Bool b3 = check_text("bool from Int", de(true, [TokInt(1)]), "Err(invalid type: expected Bool, found Int(1))");
+    Bool i1 = check("int", assert_tokens(-42, [TokInt(-42)]));
+    Bool i2 = check("int min", assert_tokens(-9223372036854775807 - 1, [TokInt(-9223372036854775807 - 1)]));
+    Bool i3 = check("int max", assert_tokens(9223372036854775807, [TokInt(9223372036854775807)]));
+    Bool i4 = check_text("int from Str", de(0, [TokStr("x")]), "Err(invalid type: expected Int, found Str(\"x\"))");
+    Bool u1 = check("u64 max", assert_tokens(u64(18446744073709551615), [TokUInt(u64(18446744073709551615))]));
+    Bool u2 = check("u64 zero", assert_tokens(u64(0), [TokUInt(u64(0))]));
+    Bool u3 = check_text("u64 from Int", de(u64(0), [TokInt(1)]), "Err(invalid type: expected UInt, found Int(1))");
+
+    // ── Narrow integers: both ends fit, one past each end is a value error.
+    Bool n1 = check("i32 bounds", assert_tokens(i32(-2147483648), [TokInt(-2147483648)]) && assert_tokens(i32(2147483647), [TokInt(2147483647)]));
+    Bool n2 = check_text("i32 over", de(i32(0), [TokInt(2147483648)]), "Err(invalid value 2147483648, expected an Int(32))");
+    Bool n3 = check_text("i32 under", de(i32(0), [TokInt(-2147483649)]), "Err(invalid value -2147483649, expected an Int(32))");
+    Bool n4 = check("i16 bounds", assert_tokens(i16(-32768), [TokInt(-32768)]) && assert_tokens(i16(32767), [TokInt(32767)]));
+    Bool n5 = check_text("i16 over", de(i16(0), [TokInt(32768)]), "Err(invalid value 32768, expected an Int(16))");
+    Bool n6 = check_text("i16 under", de(i16(0), [TokInt(-32769)]), "Err(invalid value -32769, expected an Int(16))");
+    Bool n7 = check("i8 bounds", assert_tokens(i8(-128), [TokInt(-128)]) && assert_tokens(i8(127), [TokInt(127)]));
+    Bool n8 = check_text("i8 over", de(i8(0), [TokInt(128)]), "Err(invalid value 128, expected an Int(8))");
+    Bool n9 = check_text("i8 under", de(i8(0), [TokInt(-129)]), "Err(invalid value -129, expected an Int(8))");
+    Bool n10 = check("u32 bounds", assert_tokens(u32(0), [TokUInt(u64(0))]) && assert_tokens(u32(4294967295), [TokUInt(u64(4294967295))]));
+    Bool n11 = check_text("u32 over", de(u32(0), [TokUInt(u64(4294967296))]), "Err(invalid value 4294967296, expected a UInt(32))");
+    Bool n12 = check("u16 bounds", assert_tokens(u16(0), [TokUInt(u64(0))]) && assert_tokens(u16(65535), [TokUInt(u64(65535))]));
+    Bool n13 = check_text("u16 over", de(u16(0), [TokUInt(u64(65536))]), "Err(invalid value 65536, expected a UInt(16))");
+    Bool n14 = check("u8 bounds", assert_tokens(u8(0), [TokUInt(u64(0))]) && assert_tokens(u8(255), [TokUInt(u64(255))]));
+    Bool n15 = check_text("u8 over", de(u8(0), [TokUInt(u64(256))]), "Err(invalid value 256, expected a UInt(8))");
+    Bool n16 = check_text("narrow wrong type", de(i16(0), [TokBool(true)]) + " " + de(u8(0), [TokInt(1)]), "Err(invalid type: expected Int, found Bool(true)) Err(invalid type: expected UInt, found Int(1))");
+
+    // ── 128-bit integers
+    Int(128) imin = i128(-170141183460469231731687303715884105727) - i128(1);
+    Bool w1 = check("i128 min/max", assert_tokens(imin, [TokI128(imin)]) && assert_tokens(i128(170141183460469231731687303715884105727), [TokI128(i128(170141183460469231731687303715884105727))]));
+    Bool w2 = check("u128 max", assert_tokens(u128(340282366920938463463374607431768211455), [TokU128(u128(340282366920938463463374607431768211455))]));
+    Bool w3 = check_text("i128 wrong type", de(i128(0), [TokInt(1)]) + " " + de(u128(0), [TokI128(i128(1))]), "Err(invalid type: expected I128, found Int(1)) Err(invalid type: expected U128, found I128(1))");
+
+    // ── Floats
+    Bool f1 = check("float", assert_tokens(2.5, [TokFloat(2.5)]) && assert_tokens(-0.125, [TokFloat(-0.125)]));
+    Bool f2 = check("f32", assert_tokens(f32(0.5), [TokFloat(0.5)]));
+    Bool f3 = check("f16", assert_tokens(f16(1.5), [TokFloat(1.5)]));
+    Bool f4 = check_text("float wrong type", de(0.0, [TokInt(1)]), "Err(invalid type: expected Float, found Int(1))");
+
+    // ── Dec(N): decimal text; bad text is an error; rounds to N digits.
+    Dec(10) price = d10("19.99");
+    Bool m1 = check("dec", assert_tokens(price, [TokStr(f"{price}")]));
+    Bool m2 = check_text("dec decode", de(price, [TokStr("-3.25")]), "Ok(-3.250000000)");
+    Bool m3 = check_text("dec decode integer text", de(price, [TokStr("+7")]), "Ok(7.000000000)");
+    Dec(2) small = d2("0");
+    Bool m4 = check_text("dec rounds to N digits", de(small, [TokStr("1.256")]), "Ok(1.3)");
+    Bool m5 = check_text("dec bad text", de(price, [TokStr("1.2.3")]) + " " + de(price, [TokStr("")]) + " " + de(price, [TokStr("1.")]) + " " + de(price, [TokStr(".5")]) + " " + de(price, [TokStr("1e5")]),
+        "Err(invalid value \"1.2.3\", expected decimal text) Err(invalid value \"\", expected decimal text) Err(invalid value \"1.\", expected decimal text) Err(invalid value \".5\", expected decimal text) Err(invalid value \"1e5\", expected decimal text)");
+    Bool m6 = check("is_decimal_text", is_decimal_text("0") && is_decimal_text("-12.5") && !is_decimal_text("-") && !is_decimal_text("1a"));
+
+    // ── Str and Str(N)
+    Bool s1 = check("str", assert_tokens("hi", [TokStr("hi")]) && assert_tokens("", [TokStr("")]));
+    Bool s2 = check("str unicode", assert_tokens("héllo ☃", [TokStr("héllo ☃")]));
+    Str(4) fs = "abcd";
+    Bool s3 = check("Str(N)", assert_tokens(fs, [TokStr("abcd")]));
+    Bool s4 = check_text("Str(N) fits", de(fs, [TokStr("ab")]) + " " + de(fs, [TokStr("é")]) + " " + de(fs, [TokStr("")]), "Ok(\"ab\") Ok(\"é\") Ok(\"\")");
+    Bool s5 = check_text("Str(N) too long", de(fs, [TokStr("abcde")]), "Err(invalid length 5, expected a string of at most 4 bytes)");
+    Bool s6 = check_text("Str(N) multibyte too long", de(fs, [TokStr("ééé")]), "Err(invalid length 6, expected a string of at most 4 bytes)");
+    Str(8) fu = "é☃";
+    Bool s8 = check("Str(N) streams multibyte", assert_tokens(fu, [TokStr("é☃")]));
+    Bool s9 = check_text("Str(N) wrong type", de(fs, [TokInt(1)]), "Err(invalid type: expected Str, found Int(1))");
+    Bool s7 = check("utf8_len", utf8_len("aé☃𝄞", 0, 0) == 10);
+
+    // ── Bytes(N): at most N bytes, the rest zero.
+    Bytes(3) fb3 = b"ab";
+    Bool q1 = check("Bytes(N)", assert_tokens(fb3, [TokBytes([97, 98, 0])]));
+    Bool q2 = check_text("Bytes(N) short input pads", de(fb3, [TokBytes([7])]) + " " + de(fb3, [TokBytes([])]), "Ok(b\"\\x07\\x00\\x00\") Ok(b\"\\x00\\x00\\x00\")");
+    Bool q3 = check_text("Bytes(N) too long", de(fb3, [TokBytes([1, 2, 3, 4])]), "Err(invalid length 4, expected at most 3 bytes)");
+    Bool q4 = check_text("Bytes(N) not a byte", de(fb3, [TokBytes([1, 300])]), "Err(invalid value 300, expected a byte)");
+    Bool q5 = check_text("Bytes(N) wrong type", de(fb3, [TokStr("ab")]), "Err(invalid type: expected Bytes, found Str(\"ab\"))");
+
+    // ── Bytes and unit
+    Bool y1 = check("bytes", assert_tokens(byte_buf([0, 1, 255]), [TokBytes([0, 1, 255])]));
+    List(Int) nob = [];
+    Bool y2 = check("empty bytes", assert_tokens(byte_buf(nob), [TokBytes(nob)]));
+    Bool y3 = check_text("bytes wrong type", de(byte_buf(nob), [TokSeq(0), TokSeqEnd]), "Err(invalid type: expected Bytes, found Seq(0))");
+    Bool y4 = check("unit", assert_tokens(unit(), [TokUnit]));
+    Bool y5 = check_text("unit wrong type", de(unit(), [TokNone]), "Err(invalid type: expected Unit, found None)");
+
+    // ── Option
+    Option(Int) none = None;
+    Bool o1 = check("none", assert_tokens(none, [TokNone]));
+    Bool o2 = check("some", assert_tokens(Some(3), [TokSome, TokInt(3)]));
+    Option(Option(Int)) inner_none = Some(None);
+    Bool o3 = check("some(none)", assert_tokens(inner_none, [TokSome, TokNone]));
+    Bool o4 = check_text("option wrong type", de(none, [TokInt(3)]), "Err(invalid type: expected None or Some, found Int(3))");
+    Bool o5 = check_text("some missing payload", de(none, [TokSome]), "Err(unexpected end of input, expected Int)");
+
+    // ── List
+    List(Int) empty = [];
+    Bool l1 = check("list", assert_tokens([1, 2], [TokSeq(2), TokInt(1), TokInt(2), TokSeqEnd]));
+    Bool l2 = check("empty list", assert_tokens(empty, [TokSeq(0), TokSeqEnd]));
+    Bool l3 = check("nested list", assert_tokens([[true], []], [TokSeq(2), TokSeq(1), TokBool(true), TokSeqEnd, TokSeq(0), TokSeqEnd, TokSeqEnd]));
+    Bool l4 = check_text("list element path", de(empty, [TokSeq(2), TokInt(1), TokBool(false), TokSeqEnd]), "Err(invalid type: expected Int, found Bool(false) at [1])");
+    Bool l5 = check_text("nested list path", de([empty], [TokSeq(1), TokSeq(1), TokStr("x"), TokSeqEnd, TokSeqEnd]), "Err(invalid type: expected Int, found Str(\"x\") at [0][0])");
+    Bool l6 = check_text("list unterminated", de(empty, [TokSeq(2), TokInt(1)]), "Err(unexpected end of input, expected SeqEnd)");
+    Bool l7 = check_text("list wrong type", de(empty, [TokMap(0), TokMapEnd]), "Err(invalid type: expected Seq, found Map(0))");
+
+    // ── List(T, N): exactly N elements.
+    List(Int, 3) trio = [1, 2, 3];
+    Bool x1 = check("List(T, N)", assert_tokens(trio, [TokSeq(3), TokInt(1), TokInt(2), TokInt(3), TokSeqEnd]));
+    Bool x2 = check_text("List(T, N) short", de(trio, [TokSeq(2), TokInt(1), TokInt(2), TokSeqEnd]), "Err(invalid length 2, expected a sequence of 3)");
+    Bool x3 = check_text("List(T, N) long", de(trio, [TokSeq(4), TokInt(1), TokInt(2), TokInt(3), TokInt(4), TokSeqEnd]), "Err(invalid length 4, expected a sequence of 3)");
+    List(Str, 2) duo = ["a", "b"];
+    Bool x4 = check("List(Str, N)", assert_tokens(duo, [TokSeq(2), TokStr("a"), TokStr("b"), TokSeqEnd]));
+
+    // ── Set: sorted on the way out, duplicates collapse on the way in.
+    Set(Int) st = {3, 1, 2};
+    Bool t1 = check("set", assert_tokens(st, [TokSeq(3), TokInt(1), TokInt(2), TokInt(3), TokSeqEnd]));
+    Result(Set(Int), SerialError) dd = from_tokens([TokSeq(3), TokInt(2), TokInt(2), TokInt(1), TokSeqEnd]);
+    Set(Int) dde = {};
+    Set(Int) ddv = dd else { dde };
+    Bool t2 = check_text("set dedupes", f"{sort(ddv.to_list())}", "[1, 2]");
+    Set(Str) sst = {"b", "a"};
+    Bool t3 = check("set of str", assert_tokens(sst, [TokSeq(2), TokStr("a"), TokStr("b"), TokSeqEnd]));
+
+    // ── Map: sorted keys out; later duplicates win in; any key type.
+    Map(Str, Int) m = {"b": 2, "a": 1};
+    Bool p1 = check("map", assert_tokens(m, [TokMap(2), TokStr("a"), TokInt(1), TokStr("b"), TokInt(2), TokMapEnd]));
+    Map(Str, Int) me = {};
+    Bool p2 = check("empty map", assert_tokens(me, [TokMap(0), TokMapEnd]));
+    Map(Int, Str) mi = {10: "x", -1: "y"};
+    Bool p3 = check("map int keys", assert_tokens(mi, [TokMap(2), TokInt(-1), TokStr("y"), TokInt(10), TokStr("x"), TokMapEnd]));
+    Bool p4 = check_text("map duplicate key", de(me, [TokMap(2), TokStr("a"), TokInt(1), TokStr("a"), TokInt(5), TokMapEnd]), "Ok({\"a\": 5})");
+    Bool p5 = check_text("map value path", de(me, [TokMap(1), TokStr("a"), TokStr("no"), TokMapEnd]), "Err(invalid type: expected Int, found Str(\"no\") at [\"a\"])");
+    Bool p6 = check_text("map key error", de(me, [TokMap(1), TokInt(1), TokInt(1), TokMapEnd]), "Err(invalid type: expected Str, found Int(1))");
+    Bool p7 = check_text("map wrong type", de(me, [TokSeq(0), TokSeqEnd]), "Err(invalid type: expected Map, found Seq(0))");
+
+    // ── Result: the enum Result { Ok, Err }.
+    Result(Int, Str) ok = Ok(5);
+    Result(Int, Str) err = Err("no");
+    Bool r1 = check("ok", assert_tokens(ok, [TokVariant(vt("Result", 0, "Ok")), TokInt(5), TokVariantEnd]));
+    Bool r2 = check("err", assert_tokens(err, [TokVariant(vt("Result", 1, "Err")), TokStr("no"), TokVariantEnd]));
+    Bool r3 = check_text("result unknown variant", de(ok, [TokUnitVariant(vt("Result", 2, "Maybe"))]), "Err(unknown variant `Maybe`, expected `Ok` or `Err`)");
+    Bool r4 = check_text("result unit variant", de(ok, [TokUnitVariant(vt("Result", 0, "Ok"))]), "Err(invalid type: expected a variant with a payload, found a unit variant)");
+    Bool r5 = check_text("result payload path", de(ok, [TokVariant(vt("Result", 0, "Ok")), TokStr("x"), TokVariantEnd]), "Err(invalid type: expected Int, found Str(\"x\") at ::Ok)");
+    Bool r6 = check_text("result missing end", de(ok, [TokVariant(vt("Result", 0, "Ok")), TokInt(1)]), "Err(unexpected end of input, expected VariantEnd)");
+
+    // ── Composition and top-level checks.
+    Option(List(Option(Int))) deep = Some([Some(1), None]);
+    Bool z1 = check("deep composition", assert_tokens(deep, [TokSome, TokSeq(2), TokSome, TokInt(1), TokNone, TokSeqEnd]));
+    Map(Str, List(Result(Int, Str))) mix = {"k": [Ok(1), Err("e")]};
+    Bool z2 = check("map of list of result", assert_tokens(mix, [TokMap(1), TokStr("k"), TokSeq(2), TokVariant(vt("Result", 0, "Ok")), TokInt(1), TokVariantEnd, TokVariant(vt("Result", 1, "Err")), TokStr("e"), TokVariantEnd, TokSeqEnd, TokMapEnd]));
+    Bool z3 = check_text("trailing input", de(0, [TokInt(1), TokInt(2)]), "Err(trailing input after the value: Int(2))");
+    List(Token) no_toks = [];
+    Bool z4 = check_text("empty input", de(0, no_toks), "Err(unexpected end of input, expected Int)");
+    return 0;
+}
