@@ -82,6 +82,19 @@ closures and handles have no place in the model and no instances (using one is
 the compile-time error E0226). The legacy NUL-terminated heap `Bytes` cannot
 hold a zero byte; use `ByteBuf` or `Bytes(N)`.
 
+The numeric instances are **one declaration per verb, generic in the width**, so
+a width is never written out twice. `Carries` names the widths the model
+carries, and the instance covers exactly those: a `UInt(16)` field works, a
+`UInt(512)` one is a compile-time E0226 that says so rather than truncating.
+
+```resid
+behavior Carries(T) { Bool carried(); }        // the widths the model carries
+@needs(Encoder(F), Carries(UInt(N)))
+Result(F, SerialError) enc_uint(UInt(N) x, F s) { return write_uint(s, (UInt(64))x); }
+Encode(UInt(N), F) = enc_uint;                  // every width Carries names
+Encode(UInt(128), F) = enc_u128;                // the 128-bit verbs
+```
+
 **Fixed-capacity values are never copied to the heap.** `Str(N)`, `Bytes(N)`
 and `List(T, N)` stream from their own storage (`write_str_char`,
 `write_byte`, element by element) and decode into their own builders
@@ -207,7 +220,8 @@ resid-serial needs a Resid compiler with the changes made alongside it (in
 `../resid`, spec v3.8): fixed-capacity builders, instance-covered needs,
 expected types through `?`, `else` and `match` arms, hole-aware literals and
 arms, generic sum constructors, two-slot 128-bit record fields, normalized
-import paths and `capacity()`.
+import paths, `capacity()` and integer widths read as values (§12, which is
+what lets one instance serve every width of a number).
 
 ## Tests
 

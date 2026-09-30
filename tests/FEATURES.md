@@ -45,6 +45,17 @@ Fixed-capacity values are never copied to a heap value: they stream from
 their storage (`write_str_begin`/`write_str_char`, `write_bytes_begin`/
 `write_byte`, per element) and decode into their own builders.
 
+One declaration per verb, generic in the width, so a width is written out once:
+`enc_int`, `dec_int`, `enc_uint`, `dec_uint`, `enc_float`, `dec_float` are
+generic in the width and cover exactly the widths `Carries` names; `enc_i128`,
+`dec_i128`, `enc_u128` and `dec_u128` are the 128-bit verbs' own. A width's
+bounds are read off the width (`dec_int`, `dec_uint`), so no bound is written
+twice either. `Carries` (and `width_carried`, its function) is the width policy:
+a width it does not name is not an instance, and the E0226 says which width and
+which need. Checked by `tests/builtins.resid` for every width it carries
+(both ends, one past each end) and by the compiler's conformance case
+`err_width_generic_instance_unmet` for a width it does not.
+
 Not in the data model, so no instances (a use is a compile-time E0226):
 `Int(256)`, `Int(512)`, `UInt(256)`, `UInt(512)`, `Float(128)`, `Vec(T, N)`,
 the legacy NUL-terminated heap `Bytes` (use `ByteBuf` or `Bytes(N)`),

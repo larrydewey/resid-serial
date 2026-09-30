@@ -29,6 +29,11 @@
 // Int(256), Int(512), UInt(256), UInt(512) and Float(128) have no place in
 // the data model and no instances (a use is a compile-time E0226).
 //
+// The numeric instances are written once per verb, generic in the width
+// (§12), and each width's bounds come from the width: `Carries` below
+// names the widths the data model carries, the one declaration per verb
+// covers exactly those, and nothing else spells them out.
+//
 // Fixed-capacity values (Str(N), Bytes(N), List(T, N)) are never copied to
 // a heap value on the way: they stream from where they live
 // (write_str_char, write_byte, per-element) and are decoded into their own
@@ -478,91 +483,51 @@ Encode(Bool, F) = enc_bool;
 Result(Parsed(Bool, F), SerialError) dec_bool(F s) { return read_bool(s); }
 Decode(Bool, F) = dec_bool;
 
-@needs(Encoder(F))
-Result(F, SerialError) enc_int(Int x, F s) { return write_int(s, x); }
-Encode(Int, F) = enc_int;
-@needs(Decoder(F))
-Result(Parsed(Int, F), SerialError) dec_int(F s) { return read_int(s); }
-Decode(Int, F) = dec_int;
+// ── Integers and floats ──────────────────────────────────────────────
+//
+// The data model carries a number on the widest verb that fits: the
+// 64-bit ones, which every narrower width widens to, and the 128-bit
+// ones. A narrow width is range-checked on the way back, against bounds
+// read off the width itself — a width parameter is a value (spec §12),
+// so one decoder serves every width and no bound is written twice.
+//
+// Each instance below is written once, generic in the width, and covers
+// exactly the widths `Carries` declares: the missing one is a
+// compile-time E0226 naming the width, not a silent truncation.
 
-@needs(Encoder(F))
-Result(F, SerialError) enc_i32(Int(32) x, F s) { return write_int(s, (Int)x); }
-Encode(Int(32), F) = enc_i32;
-@needs(Decoder(F))
-Result(Parsed(Int(32), F), SerialError) dec_i32(F s) {
+// The widths the data model carries. A wider one has no place in it.
+behavior Carries(T) { Bool carried(); }
+Bool width_carried() { return true; }
+Carries(Int(8)) = width_carried;
+Carries(Int(16)) = width_carried;
+Carries(Int(32)) = width_carried;
+Carries(Int(64)) = width_carried;
+Carries(UInt(8)) = width_carried;
+Carries(UInt(16)) = width_carried;
+Carries(UInt(32)) = width_carried;
+Carries(UInt(64)) = width_carried;
+Carries(Float(16)) = width_carried;
+Carries(Float(32)) = width_carried;
+Carries(Float(64)) = width_carried;
+
+// Every signed width the 64-bit verb carries, widened to it.
+@needs(Encoder(F), Carries(Int(N)))
+Result(F, SerialError) enc_int(Int(N) x, F s) { return write_int(s, (Int)x); }
+Encode(Int(N), F) = enc_int;
+
+// ... and back to the width it came from, checked against that width.
+// A 64-bit integer is the width the verb carries, so it needs no check.
+@needs(Decoder(F), Carries(Int(N)))
+Result(Parsed(Int(N), F), SerialError) dec_int(F s) {
     Parsed(Int, F) p = read_int(s)?;
-    if (p.value < -2147483648 || p.value > 2147483647) { return Err(invalid_value(f"{p.value}", "an Int(32)")); }
-    Int(32) v = i32(p.value);
+    Int bits = (Int)N;
+    if (bits == 64) { Int(N) exact = (Int(N))p.value; return parsed(exact, p.rest); }
+    Int half = ((Int)1) << (bits - 1);
+    if (p.value < 0 - half || p.value > half - 1) { return Err(invalid_value(f"{p.value}", f"an Int({bits})")); }
+    Int(N) v = (Int(N))p.value;
     return parsed(v, p.rest);
 }
-Decode(Int(32), F) = dec_i32;
-
-@needs(Encoder(F))
-Result(F, SerialError) enc_i16(Int(16) x, F s) { return write_int(s, (Int)x); }
-Encode(Int(16), F) = enc_i16;
-@needs(Decoder(F))
-Result(Parsed(Int(16), F), SerialError) dec_i16(F s) {
-    Parsed(Int, F) p = read_int(s)?;
-    if (p.value < -32768 || p.value > 32767) { return Err(invalid_value(f"{p.value}", "an Int(16)")); }
-    Int(16) v = i16(p.value);
-    return parsed(v, p.rest);
-}
-Decode(Int(16), F) = dec_i16;
-
-@needs(Encoder(F))
-Result(F, SerialError) enc_i8(Int(8) x, F s) { return write_int(s, (Int)x); }
-Encode(Int(8), F) = enc_i8;
-@needs(Decoder(F))
-Result(Parsed(Int(8), F), SerialError) dec_i8(F s) {
-    Parsed(Int, F) p = read_int(s)?;
-    if (p.value < -128 || p.value > 127) { return Err(invalid_value(f"{p.value}", "an Int(8)")); }
-    Int(8) v = i8(p.value);
-    return parsed(v, p.rest);
-}
-Decode(Int(8), F) = dec_i8;
-
-@needs(Encoder(F))
-Result(F, SerialError) enc_u64(UInt(64) x, F s) { return write_uint(s, x); }
-Encode(UInt(64), F) = enc_u64;
-@needs(Decoder(F))
-Result(Parsed(UInt(64), F), SerialError) dec_u64(F s) { return read_uint(s); }
-Decode(UInt(64), F) = dec_u64;
-
-@needs(Encoder(F))
-Result(F, SerialError) enc_u32(UInt(32) x, F s) { return write_uint(s, (UInt(64))x); }
-Encode(UInt(32), F) = enc_u32;
-@needs(Decoder(F))
-Result(Parsed(UInt(32), F), SerialError) dec_u32(F s) {
-    Parsed(UInt(64), F) p = read_uint(s)?;
-    if (p.value > u64(4294967295)) { return Err(invalid_value(f"{p.value}", "a UInt(32)")); }
-    UInt(32) v = u32(p.value);
-    return parsed(v, p.rest);
-}
-Decode(UInt(32), F) = dec_u32;
-
-@needs(Encoder(F))
-Result(F, SerialError) enc_u16(UInt(16) x, F s) { return write_uint(s, (UInt(64))x); }
-Encode(UInt(16), F) = enc_u16;
-@needs(Decoder(F))
-Result(Parsed(UInt(16), F), SerialError) dec_u16(F s) {
-    Parsed(UInt(64), F) p = read_uint(s)?;
-    if (p.value > u64(65535)) { return Err(invalid_value(f"{p.value}", "a UInt(16)")); }
-    UInt(16) v = u16(p.value);
-    return parsed(v, p.rest);
-}
-Decode(UInt(16), F) = dec_u16;
-
-@needs(Encoder(F))
-Result(F, SerialError) enc_u8(UInt(8) x, F s) { return write_uint(s, (UInt(64))x); }
-Encode(UInt(8), F) = enc_u8;
-@needs(Decoder(F))
-Result(Parsed(UInt(8), F), SerialError) dec_u8(F s) {
-    Parsed(UInt(64), F) p = read_uint(s)?;
-    if (p.value > u64(255)) { return Err(invalid_value(f"{p.value}", "a UInt(8)")); }
-    UInt(8) v = u8(p.value);
-    return parsed(v, p.rest);
-}
-Decode(UInt(8), F) = dec_u8;
+Decode(Int(N), F) = dec_int;
 
 @needs(Encoder(F))
 Result(F, SerialError) enc_i128(Int(128) x, F s) { return write_i128(s, x); }
@@ -571,6 +536,25 @@ Encode(Int(128), F) = enc_i128;
 Result(Parsed(Int(128), F), SerialError) dec_i128(F s) { return read_i128(s); }
 Decode(Int(128), F) = dec_i128;
 
+// Unsigned: the same three steps on the unsigned verbs. Nothing below
+// zero needs checking: read_uint reads no negative value.
+@needs(Encoder(F), Carries(UInt(N)))
+Result(F, SerialError) enc_uint(UInt(N) x, F s) { return write_uint(s, (UInt(64))x); }
+Encode(UInt(N), F) = enc_uint;
+
+@needs(Decoder(F), Carries(UInt(N)))
+Result(Parsed(UInt(N), F), SerialError) dec_uint(F s) {
+    Parsed(UInt(64), F) p = read_uint(s)?;
+    Int bits = (Int)N;
+    if (bits == 64) { UInt(N) exact = (UInt(N))p.value; return parsed(exact, p.rest); }
+    Int full = ((Int)1) << bits;
+    UInt(64) whi = (UInt(64))(full - 1);
+    if (p.value > whi) { return Err(invalid_value(f"{p.value}", f"a UInt({bits})")); }
+    UInt(N) v = (UInt(N))p.value;
+    return parsed(v, p.rest);
+}
+Decode(UInt(N), F) = dec_uint;
+
 @needs(Encoder(F))
 Result(F, SerialError) enc_u128(UInt(128) x, F s) { return write_u128(s, x); }
 Encode(UInt(128), F) = enc_u128;
@@ -578,34 +562,19 @@ Encode(UInt(128), F) = enc_u128;
 Result(Parsed(UInt(128), F), SerialError) dec_u128(F s) { return read_u128(s); }
 Decode(UInt(128), F) = dec_u128;
 
-@needs(Encoder(F))
-Result(F, SerialError) enc_float(Float x, F s) { return write_float(s, x); }
-Encode(Float, F) = enc_float;
-@needs(Decoder(F))
-Result(Parsed(Float, F), SerialError) dec_float(F s) { return read_float(s); }
-Decode(Float, F) = dec_float;
+// A float narrows by rounding, not by a bound, so every width the
+// 64-bit verb carries is one body each way.
+@needs(Encoder(F), Carries(Float(N)))
+Result(F, SerialError) enc_float(Float(N) x, F s) { return write_float(s, (Float)x); }
+Encode(Float(N), F) = enc_float;
 
-@needs(Encoder(F))
-Result(F, SerialError) enc_f32(Float(32) x, F s) { return write_float(s, (Float)x); }
-Encode(Float(32), F) = enc_f32;
-@needs(Decoder(F))
-Result(Parsed(Float(32), F), SerialError) dec_f32(F s) {
+@needs(Decoder(F), Carries(Float(N)))
+Result(Parsed(Float(N), F), SerialError) dec_float(F s) {
     Parsed(Float, F) p = read_float(s)?;
-    Float(32) v = f32(p.value);
+    Float(N) v = (Float(N))p.value;
     return parsed(v, p.rest);
 }
-Decode(Float(32), F) = dec_f32;
-
-@needs(Encoder(F))
-Result(F, SerialError) enc_f16(Float(16) x, F s) { return write_float(s, (Float)x); }
-Encode(Float(16), F) = enc_f16;
-@needs(Decoder(F))
-Result(Parsed(Float(16), F), SerialError) dec_f16(F s) {
-    Parsed(Float, F) p = read_float(s)?;
-    Float(16) v = f16(p.value);
-    return parsed(v, p.rest);
-}
-Decode(Float(16), F) = dec_f16;
+Decode(Float(N), F) = dec_float;
 
 // ── Dec(N): its decimal text ("19.99"), as decimal libraries usually
 // serialize to keep every digit. Decoding checks the text first (a bad
