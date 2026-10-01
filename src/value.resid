@@ -59,7 +59,7 @@ pub Str show_value(Value v) {
         VUnit => "()", VBool(b) => f"{b}", VInt(i) => f"{i}", VUInt(u) => f"{u}u", VI128(w) => f"{w}i128",
         VU128(uw) => f"{uw}u128", VFloat(f) => show_float(f),
         VStr(s) => quote(s), VBytes(bs) => f"b{bs}", VNone => "None", VSome(x) => "Some(" + show_value(x) + ")",
-        VSeq(xs) => "[" + show_values(xs, 0, "") + "]", VMap(es) => "{" + show_entries(es, 0, "") + "}",
+        VSeq(xs) => "[" + show_values(xs, 0, StrBuf()) + "]", VMap(es) => "{" + show_entries(es, 0, StrBuf()) + "}",
         VStruct(r) => show_record(r), VUnitVariant(t) => show_tag(t), VVariant(p) => show_tag(p.tag) + "(" + show_value(p.payload) + ")"
     };
 }
@@ -74,28 +74,31 @@ Str quote(Str s) { return "\"" + s + "\""; }
 
 Str show_tag(VTag t) { return if (t.enum_name == "") { t.name } else { t.enum_name + "::" + t.name }; }
 
-Str show_values(List(Value) xs, Int i, Str acc) {
-    if (i >= xs.len()) { return acc; }
+// The elements, joined into one builder rather than a fresh string each.
+Str show_values(List(Value) xs, Int i, StrBuf b) {
+    if (i >= xs.len()) { return b.finish(); }
     Str sep = if (i == 0) { "" } else { ", " };
-    return show_values(xs, i + 1, acc + sep + show_value(xs[i]));
+    return show_values(xs, i + 1, b.push(sep).push(show_value(xs[i])));
 }
 
-Str show_entries(List(VEntry) es, Int i, Str acc) {
-    if (i >= es.len()) { return acc; }
+Str show_entries(List(VEntry) es, Int i, StrBuf b) {
+    if (i >= es.len()) { return b.finish(); }
     Str sep = if (i == 0) { "" } else { ", " };
-    return show_entries(es, i + 1, acc + sep + show_value(es[i].key) + ": " + show_value(es[i].val));
+    StrBuf more = b.push(sep).push(show_value(es[i].key)).push(": ").push(show_value(es[i].val));
+    return show_entries(es, i + 1, more);
 }
 
 Str show_record(VRecord r) {
     Str head = if (r.name == "") { "" } else { r.name + " " };
     if (r.fields.len() == 0) { return head + "{}"; }
-    return head + "{ " + show_fields(r.fields, 0, "") + " }";
+    return head + "{ " + show_fields(r.fields, 0, StrBuf()) + " }";
 }
 
-Str show_fields(List(VField) fs, Int i, Str acc) {
-    if (i >= fs.len()) { return acc; }
+Str show_fields(List(VField) fs, Int i, StrBuf b) {
+    if (i >= fs.len()) { return b.finish(); }
     Str sep = if (i == 0) { "" } else { ", " };
-    return show_fields(fs, i + 1, acc + sep + fs[i].name + ": " + show_value(fs[i].val));
+    StrBuf more = b.push(sep).push(fs[i].name).push(": ").push(show_value(fs[i].val));
+    return show_fields(fs, i + 1, more);
 }
 
 // Structural equality. Struct and variant names compare only when both

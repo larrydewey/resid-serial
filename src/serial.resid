@@ -97,13 +97,13 @@ pub SerialError trailing_input(Str what) { return serial_error(ErrTrailing, "tra
 // "`a`, `b` or `c`" (or "nothing" for an empty list).
 Str one_of(List(Str) names) {
     if (names.len() == 0) { return "nothing"; }
-    return one_of_at(names, 0, "");
+    return one_of_at(names, 0, StrBuf());
 }
 
-Str one_of_at(List(Str) names, Int i, Str acc) {
-    if (i >= names.len()) { return acc; }
+Str one_of_at(List(Str) names, Int i, StrBuf b) {
+    if (i >= names.len()) { return b.finish(); }
     Str sep = if (i == 0) { "" } else { if (i == names.len() - 1) { " or " } else { ", " } };
-    return one_of_at(names, i + 1, acc + sep + "`" + names[i] + "`");
+    return one_of_at(names, i + 1, b.push(sep).push("`").push(names[i]).push("`"));
 }
 
 // The path as one string: ".items[3].name" ("" at the top level).
