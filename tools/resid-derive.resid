@@ -1024,7 +1024,7 @@ Out gen_untagged_cases(Decl d, List(VPlan) ps, Int j, Out o) {
     if (p.skip) { return gen_untagged_cases(d, ps, j + 1, o); }
     Str st = self_ty(d);
     List(Str) ls = if (p.v.payload == "") {
-        ["    if (is_unit_value(v)) { " + st + f" u{j} = " + p.v.name + f"; return parsed(u{j}, pv.rest); }"]
+        ["    if (is_unit_value(v)) { " + st + f" u{j} = " + p.v.name + f"; return parsed(u{j}, pv.rest); }}"]
     } else {
         [
             "    Result(" + p.v.payload + f", SerialError) r{j} = from_value(v);",
