@@ -1,6 +1,6 @@
 # resid-serial
 
-A serialization framework for [Resid](../resid), in the spirit of Rust's
+A serialization framework for [Resid](https://github.com/larrydewey/Resid), in the spirit of Rust's
 serde: types describe themselves once, formats implement one protocol, and
 any type goes to any format. This package is the framework only. It ships no
 JSON, CBOR or other real formats; those are separate packages built on it.
