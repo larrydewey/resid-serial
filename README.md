@@ -55,8 +55,14 @@ F     --read_struct_begin, read_field, ...--Decode(Point, F)-->     Point
 | `tools/resid-derive.resid` | the instance generator |
 | `tests/` | the test suite and `FEATURES.md`, the map from every feature to its test |
 
-Import the files by path (`import "vendor/resid-serial/src/serial.resid";`)
-or copy `src/` next to your code.
+As a dependency, name it in `resid.toml` (`[dependencies.resid-serial]`,
+a `path` or a registry `version`) and import its modules by package name:
+`import "resid-serial/serial.resid";`, `import "resid-serial/value.resid";`.
+They resolve beside the package root, `src/serial.resid`, and compile
+inside the ceiling the manifest gives the dependency. Build through
+`resid-manifest build`, or `residc -depmap` with the map
+`resid-manifest depmap` writes. A file in this checkout can still import
+`../src/serial.resid` by path.
 
 ## The data model
 
@@ -122,7 +128,7 @@ type Event = Started(Config) | Stopped;
 
 ```sh
 residc tools/resid-derive.resid -o resid-derive
-./resid-derive --lib vendor/resid-serial/src types.resid     # writes types_serial.resid
+./resid-derive --lib resid-serial types.resid     # writes types_serial.resid
 ./resid-derive --inplace app.resid                           # or into the file itself
 ```
 
