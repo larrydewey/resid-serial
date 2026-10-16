@@ -545,6 +545,13 @@ Bool fields_flatten(List(Field) fs, Int i) {
 
 type Out = { List(Str) lines; Str err; Bool value; };
 
+// `///` lines for the generated public functions: a module in a standard
+// library that requires a doc comment on every public function stays complete.
+Str doc_names(Decl d) { return "/// The serialized field names of `" + d.name + "`, in declaration order."; }
+Str doc_variants(Decl d) { return "/// The serialized variant names of `" + d.name + "`, in declaration order."; }
+Str doc_enc(Decl d) { return "/// Encodes a `" + d.name + "` through the encoder `s`."; }
+Str doc_dec(Decl d) { return "/// Decodes a `" + d.name + "` from the decoder `s`, with the input left over."; }
+
 Out emit(Out o, Str line) { return Out {.lines = o.lines.concat([line]), .err = o.err, .value = o.value}; }
 
 Out emit_all(Out o, List(Str) ls) { return Out {.lines = o.lines.concat(ls), .err = o.err, .value = o.value}; }
@@ -590,7 +597,7 @@ Out gen_record(Decl d, Str rule, Bool enc, Bool dec, Out o) {
     if (bad != "") { return fail(o, bad); }
     if (has_attr(d.attrs, "transparent")) { return gen_transparent(d, ps, enc, dec, o); }
     Bool flat = any_flatten(ps, 0);
-    Out o1 = emit(o, "pub List(Str) " + prefix(d) + "_names() { return " + quoted_list(decode_names(ps, 0, [])) + "; }");
+    Out o1 = emit_all(o, [doc_names(d), "pub List(Str) " + prefix(d) + "_names() { return " + quoted_list(decode_names(ps, 0, [])) + "; }"]);
     Out o2 = if (enc) { if (flat) { gen_record_enc_value(d, ps, o1) } else { gen_record_enc(d, ps, o1) } } else { o1 };
     Out o3 = if (dec) { if (flat) { gen_record_dec_value(d, ps, o2) } else { gen_record_dec(d, ps, o2) } } else { o2 };
     return emit(o3, "");
@@ -607,6 +614,7 @@ Out gen_record_enc(Decl d, List(Plan) ps, Out o) {
     Str fv = fmt_var(d);
     Str needs = "@needs(Encoder(" + fv + ")" + needs_list(d.params, "Encode", fv, 0, "") + ")";
     Out o1 = emit_all(o, [
+        doc_enc(d),
         needs,
         "pub Result(" + fv + ", SerialError) " + prefix(d) + "_encode(" + self_ty(d) + " v, " + fv + " s) {",
         "    Int n = " + enc_count(ps, 0, 0, "") + ";",
@@ -683,6 +691,7 @@ Out gen_record_dec(Decl d, List(Plan) ps, Out o) {
     Str pre = prefix(d);
     Str deny = if (has_attr(d.attrs, "deny_unknown_fields")) { "true" } else { "false" };
     Out o1 = emit_all(o, [
+        doc_dec(d),
         needs,
         "pub " + res + " " + pre + "_decode(" + fv + " s) {",
         "    " + fv + " s0 = read_struct_begin(s, " + quoted(wire_name(d)) + ", " + pre + "_names())?;",
@@ -762,6 +771,7 @@ Out gen_record_enc_value(Decl d, List(Plan) ps, Out o) {
     Str fv = fmt_var(d);
     Str needs = "@needs(Encoder(" + fv + ")" + needs_list(d.params, "Encode", "VEnc", 0, "") + ")";
     Out o1 = emit_all(uses_value(o), [
+        doc_enc(d),
         needs,
         "pub Result(" + fv + ", SerialError) " + prefix(d) + "_encode(" + self_ty(d) + " v, " + fv + " s) {",
         "    List(VField) fs0 = [];"
@@ -795,6 +805,7 @@ Out gen_record_dec_value(Decl d, List(Plan) ps, Out o) {
     Str needs = "@needs(Decoder(" + fv + ")" + needs_list(d.params, "Decode", "VDec", 0, "") + ")";
     Str res = "Result(Parsed(" + self_ty(d) + ", " + fv + "), SerialError)";
     Out o1 = emit_all(uses_value(o), [
+        doc_dec(d),
         needs,
         "pub " + res + " " + prefix(d) + "_decode(" + fv + " s) {",
         "    Parsed(Value, " + fv + ") pv = decode(s)?;",
@@ -833,11 +844,13 @@ Out gen_transparent(Decl d, List(Plan) ps, Bool enc, Bool dec, Out o) {
     Str fv = fmt_var(d);
     Str pre = prefix(d);
     List(Str) e = [
+        doc_enc(d),
         "@needs(Encoder(" + fv + ")" + needs_list(d.params, "Encode", fv, 0, "") + ")",
         "pub Result(" + fv + ", SerialError) " + pre + "_encode(" + self_ty(d) + " v, " + fv + " s) { return encode(v." + p.f.name + ", s); }",
         "Encode(" + self_ty(d) + ", " + fv + ") = " + pre + "_encode;"
     ];
     List(Str) dl = [
+        doc_dec(d),
         "@needs(Decoder(" + fv + ")" + needs_list(d.params, "Decode", fv, 0, "") + ")",
         "pub Result(Parsed(" + self_ty(d) + ", " + fv + "), SerialError) " + pre + "_decode(" + fv + " s) {",
         "    Parsed(" + p.f.ty + ", " + fv + ") p = decode(s)?;",
@@ -882,7 +895,7 @@ Out gen_sum(Decl d, Str rule, Bool enc, Bool dec, Out o) {
     Str bad = check_variants(d, ps, 0);
     if (bad != "") { return fail(o, bad); }
     Str r = repr(d);
-    Out o1 = emit(o, "pub List(Str) " + prefix(d) + "_variants() { return " + quoted_list(variant_names(ps, 0, [])) + "; }");
+    Out o1 = emit_all(o, [doc_variants(d), "pub List(Str) " + prefix(d) + "_variants() { return " + quoted_list(variant_names(ps, 0, [])) + "; }"]);
     Out o2 = if (enc) { gen_sum_enc(d, ps, r, o1) } else { o1 };
     Out o3 = if (dec) { if (r == "external") { gen_sum_dec(d, ps, o2) } else { gen_sum_dec_value(d, ps, r, o2) } } else { o2 };
     return emit(o3, "");
@@ -902,6 +915,7 @@ Out gen_sum_enc(Decl d, List(VPlan) ps, Str r, Out o) {
     Bool via = r == "internal";
     Str needs = "@needs(Encoder(" + fv + ")" + needs_list(d.params, "Encode", fv, 0, "") + (if (via) { needs_list(d.params, "Encode", "VEnc", 0, "") } else { "" }) + ")";
     Out o1 = emit_all(if (via) { uses_value(o) } else { o }, [
+        doc_enc(d),
         needs,
         "pub Result(" + fv + ", SerialError) " + prefix(d) + "_encode(" + self_ty(d) + " v, " + fv + " s) {",
         "    return match v {"
@@ -946,6 +960,7 @@ Out gen_sum_dec(Decl d, List(VPlan) ps, Out o) {
     Str pre = prefix(d);
     Str needs = "@needs(Decoder(" + fv + ")" + needs_list(d.params, "Decode", fv, 0, "") + ")";
     Out o1 = emit_all(o, [
+        doc_dec(d),
         needs,
         "pub Result(Parsed(" + self_ty(d) + ", " + fv + "), SerialError) " + pre + "_decode(" + fv + " s) {",
         "    Parsed(Int, " + fv + ") t = read_variant(s, " + quoted(wire_name(d)) + ", " + pre + "_variants())?;",
@@ -982,6 +997,7 @@ Out gen_sum_dec_value(Decl d, List(VPlan) ps, Str r, Out o) {
     Str tag = quoted(attr_val(d.attrs, "tag"));
     Str content = quoted(attr_val(d.attrs, "content"));
     List(Str) head = [
+        doc_dec(d),
         needs,
         "pub Result(Parsed(" + self_ty(d) + ", " + fv + "), SerialError) " + pre + "_decode(" + fv + " s) {",
         "    Parsed(Value, " + fv + ") pv = decode(s)?;",

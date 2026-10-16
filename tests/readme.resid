@@ -58,7 +58,9 @@ Int main() {
 // From the //@ serial annotations above; rerun resid-derive --inplace to update.
 
 // ── User (line 8)
+/// The serialized field names of `User`, in declaration order.
 pub List(Str) derive_user_names() { return ["userName", "email", "scores"]; }
+/// Encodes a `User` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_user_encode(User v, F s) {
     Int n = 3;
@@ -69,6 +71,7 @@ pub Result(F, SerialError) derive_user_encode(User v, F s) {
     return write_struct_end(s3);
 }
 Encode(User, F) = derive_user_encode;
+/// Decodes a `User` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(User, F), SerialError) derive_user_decode(F s) {
     F s0 = read_struct_begin(s, "User", derive_user_names())?;
@@ -100,7 +103,9 @@ Result(Parsed(User, F), SerialError) derive_user_done(F s, Option(Str) f_user_na
 Decode(User, F) = derive_user_decode;
 
 // ── Config (line 11)
+/// The serialized field names of `Config`, in declaration order.
 pub List(Str) derive_config_names() { return ["hostname", "server", "port", "note"]; }
+/// Encodes a `Config` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_config_encode(Config v, F s) {
     Int n = 2 + (if (is_none_str(v.note)) { 0 } else { 1 });
@@ -111,6 +116,7 @@ pub Result(F, SerialError) derive_config_encode(Config v, F s) {
     return write_struct_end(s3);
 }
 Encode(Config, F) = derive_config_encode;
+/// Decodes a `Config` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(Config, F), SerialError) derive_config_decode(F s) {
     F s0 = read_struct_begin(s, "Config", derive_config_names())?;
@@ -144,7 +150,9 @@ Result(Parsed(Config, F), SerialError) derive_config_done(F s, Option(Str) f_hos
 Decode(Config, F) = derive_config_decode;
 
 // ── Event (line 19)
+/// The serialized variant names of `Event`, in declaration order.
 pub List(Str) derive_event_variants() { return ["started", "stopped"]; }
+/// Encodes a `Event` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_event_encode(Event v, F s) {
     return match v {
@@ -153,6 +161,7 @@ pub Result(F, SerialError) derive_event_encode(Event v, F s) {
     };
 }
 Encode(Event, F) = derive_event_encode;
+/// Decodes a `Event` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(Event, F), SerialError) derive_event_decode(F s) {
     Parsed(Value, F) pv = decode(s)?;

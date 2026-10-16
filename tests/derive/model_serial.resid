@@ -4,7 +4,9 @@ import "../../src/serial.resid";
 import "../../src/value.resid";
 
 // ── Point (line 5)
+/// The serialized field names of `Point`, in declaration order.
 pub List(Str) derive_point_names() { return ["x", "y"]; }
+/// Encodes a `Point` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_point_encode(Point v, F s) {
     Int n = 2;
@@ -14,6 +16,7 @@ pub Result(F, SerialError) derive_point_encode(Point v, F s) {
     return write_struct_end(s2);
 }
 Encode(Point, F) = derive_point_encode;
+/// Decodes a `Point` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(Point, F), SerialError) derive_point_decode(F s) {
     F s0 = read_struct_begin(s, "Point", derive_point_names())?;
@@ -42,7 +45,9 @@ Result(Parsed(Point, F), SerialError) derive_point_done(F s, Option(Int) f_x, Op
 Decode(Point, F) = derive_point_decode;
 
 // ── User (line 8)
+/// The serialized field names of `User`, in declaration order.
 pub List(Str) derive_user_names() { return ["login", "user", "loginCount", "email", "homePoints"]; }
+/// Encodes a `User` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_user_encode(User v, F s) {
     Int n = 3 + (if (is_none_str(v.email)) { 0 } else { 1 });
@@ -54,6 +59,7 @@ pub Result(F, SerialError) derive_user_encode(User v, F s) {
     return write_struct_end(s4);
 }
 Encode(User, F) = derive_user_encode;
+/// Decodes a `User` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(User, F), SerialError) derive_user_decode(F s) {
     F s0 = read_struct_begin(s, "User", derive_user_names())?;
@@ -89,7 +95,9 @@ Result(Parsed(User, F), SerialError) derive_user_done(F s, Option(Str) f_user_na
 Decode(User, F) = derive_user_decode;
 
 // ── Shape (line 20)
+/// The serialized variant names of `Shape`, in declaration order.
 pub List(Str) derive_shape_variants() { return ["circle", "Square", "Nothing", "Empty"]; }
+/// Encodes a `Shape` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_shape_encode(Shape v, F s) {
     return match v {
@@ -99,6 +107,7 @@ pub Result(F, SerialError) derive_shape_encode(Shape v, F s) {
     };
 }
 Encode(Shape, F) = derive_shape_encode;
+/// Decodes a `Shape` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(Shape, F), SerialError) derive_shape_decode(F s) {
     Parsed(Int, F) t = read_variant(s, "Shape", derive_shape_variants())?;
@@ -111,7 +120,9 @@ pub Result(Parsed(Shape, F), SerialError) derive_shape_decode(F s) {
 Decode(Shape, F) = derive_shape_decode;
 
 // ── Pair(T) (line 26)
+/// The serialized field names of `Pair`, in declaration order.
 pub List(Str) derive_pair_names() { return ["first", "second"]; }
+/// Encodes a `Pair` through the encoder `s`.
 @needs(Encoder(F), Encode(T, F))
 pub Result(F, SerialError) derive_pair_encode(Pair(T) v, F s) {
     Int n = 2;
@@ -121,6 +132,7 @@ pub Result(F, SerialError) derive_pair_encode(Pair(T) v, F s) {
     return write_struct_end(s2);
 }
 Encode(Pair(T), F) = derive_pair_encode;
+/// Decodes a `Pair` from the decoder `s`, with the input left over.
 @needs(Decoder(F), Decode(T, F))
 pub Result(Parsed(Pair(T), F), SerialError) derive_pair_decode(F s) {
     F s0 = read_struct_begin(s, "Pair", derive_pair_names())?;
@@ -149,7 +161,9 @@ Result(Parsed(Pair(T), F), SerialError) derive_pair_done(F s, Option(T) f_first,
 Decode(Pair(T), F) = derive_pair_decode;
 
 // ── Tree(T) (line 29)
+/// The serialized variant names of `Tree`, in declaration order.
 pub List(Str) derive_tree_variants() { return ["Leaf", "Node"]; }
+/// Encodes a `Tree` through the encoder `s`.
 @needs(Encoder(F), Encode(T, F))
 pub Result(F, SerialError) derive_tree_encode(Tree(T) v, F s) {
     return match v {
@@ -158,6 +172,7 @@ pub Result(F, SerialError) derive_tree_encode(Tree(T) v, F s) {
     };
 }
 Encode(Tree(T), F) = derive_tree_encode;
+/// Decodes a `Tree` from the decoder `s`, with the input left over.
 @needs(Decoder(F), Decode(T, F))
 pub Result(Parsed(Tree(T), F), SerialError) derive_tree_decode(F s) {
     Parsed(Int, F) t = read_variant(s, "Tree", derive_tree_variants())?;
@@ -169,9 +184,11 @@ pub Result(Parsed(Tree(T), F), SerialError) derive_tree_decode(F s) {
 Decode(Tree(T), F) = derive_tree_decode;
 
 // ── Meters (line 32)
+/// Encodes a `Meters` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_meters_encode(Meters v, F s) { return encode(v.value, s); }
 Encode(Meters, F) = derive_meters_encode;
+/// Decodes a `Meters` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(Meters, F), SerialError) derive_meters_decode(F s) {
     Parsed(Float, F) p = decode(s)?;
@@ -180,7 +197,9 @@ pub Result(Parsed(Meters, F), SerialError) derive_meters_decode(F s) {
 Decode(Meters, F) = derive_meters_decode;
 
 // ── Event (line 35)
+/// The serialized variant names of `Event`, in declaration order.
 pub List(Str) derive_event_variants() { return ["Click", "Key", "Quit"]; }
+/// Encodes a `Event` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_event_encode(Event v, F s) {
     return match v {
@@ -190,6 +209,7 @@ pub Result(F, SerialError) derive_event_encode(Event v, F s) {
     };
 }
 Encode(Event, F) = derive_event_encode;
+/// Decodes a `Event` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(Event, F), SerialError) derive_event_decode(F s) {
     Parsed(Value, F) pv = decode(s)?;
@@ -204,7 +224,9 @@ pub Result(Parsed(Event, F), SerialError) derive_event_decode(F s) {
 Decode(Event, F) = derive_event_decode;
 
 // ── KeyPress (line 38)
+/// The serialized field names of `KeyPress`, in declaration order.
 pub List(Str) derive_key_press_names() { return ["key", "shift"]; }
+/// Encodes a `KeyPress` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_key_press_encode(KeyPress v, F s) {
     Int n = 2;
@@ -214,6 +236,7 @@ pub Result(F, SerialError) derive_key_press_encode(KeyPress v, F s) {
     return write_struct_end(s2);
 }
 Encode(KeyPress, F) = derive_key_press_encode;
+/// Decodes a `KeyPress` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(KeyPress, F), SerialError) derive_key_press_decode(F s) {
     F s0 = read_struct_begin(s, "KeyPress", derive_key_press_names())?;
@@ -242,7 +265,9 @@ Result(Parsed(KeyPress, F), SerialError) derive_key_press_done(F s, Option(Str) 
 Decode(KeyPress, F) = derive_key_press_decode;
 
 // ── Msg (line 41)
+/// The serialized variant names of `Msg`, in declaration order.
 pub List(Str) derive_msg_variants() { return ["Text", "Ping"]; }
+/// Encodes a `Msg` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_msg_encode(Msg v, F s) {
     return match v {
@@ -251,6 +276,7 @@ pub Result(F, SerialError) derive_msg_encode(Msg v, F s) {
     };
 }
 Encode(Msg, F) = derive_msg_encode;
+/// Decodes a `Msg` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(Msg, F), SerialError) derive_msg_decode(F s) {
     Parsed(Value, F) pv = decode(s)?;
@@ -264,7 +290,9 @@ pub Result(Parsed(Msg, F), SerialError) derive_msg_decode(F s) {
 Decode(Msg, F) = derive_msg_decode;
 
 // ── Loose (line 44)
+/// The serialized variant names of `Loose`, in declaration order.
 pub List(Str) derive_loose_variants() { return ["Num", "Word", "Pt"]; }
+/// Encodes a `Loose` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_loose_encode(Loose v, F s) {
     return match v {
@@ -274,6 +302,7 @@ pub Result(F, SerialError) derive_loose_encode(Loose v, F s) {
     };
 }
 Encode(Loose, F) = derive_loose_encode;
+/// Decodes a `Loose` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(Loose, F), SerialError) derive_loose_decode(F s) {
     Parsed(Value, F) pv = decode(s)?;
@@ -289,7 +318,9 @@ pub Result(Parsed(Loose, F), SerialError) derive_loose_decode(F s) {
 Decode(Loose, F) = derive_loose_decode;
 
 // ── Wrapper (line 47)
+/// The serialized field names of `Wrapper`, in declaration order.
 pub List(Str) derive_wrapper_names() { return ["id"]; }
+/// Encodes a `Wrapper` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_wrapper_encode(Wrapper v, F s) {
     List(VField) fs0 = [];
@@ -299,6 +330,7 @@ pub Result(F, SerialError) derive_wrapper_encode(Wrapper v, F s) {
     return encode(whole, s);
 }
 Encode(Wrapper, F) = derive_wrapper_encode;
+/// Decodes a `Wrapper` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(Wrapper, F), SerialError) derive_wrapper_decode(F s) {
     Parsed(Value, F) pv = decode(s)?;
