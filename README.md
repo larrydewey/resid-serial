@@ -240,3 +240,7 @@ Every test program checks its own results (`ok` / `FAIL` lines), and
 `run.sh` compares each program's full output and exit status with its golden
 file. `tests/FEATURES.md` maps every public function, verb, instance, derive
 option and diagnostic to the checks that cover it.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
